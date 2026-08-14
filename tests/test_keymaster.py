@@ -233,6 +233,79 @@ def test_release_force_overrides_an_open_fd(tmp_path, sysfs):
     assert gk.unit_lease(grant.units[0]) is None
 
 
+def test_release_never_resets_chips_that_now_belong_to_someone_else(tmp_path, sysfs,
+                                                                    monkeypatch):
+    """The B2 race, reproduced through the /proc scan that opens the window.
+
+    A stale lease is released by hand -- exactly what the gatekeeper skill
+    tells a human or successor agent to do. The scan of /proc/*/fd takes real
+    time, and another agent's `acquire` legitimately reaps the stale lease and
+    claims the unit inside that window. The release must notice on its way
+    out and abort: running `tt-smi -r` here would reset the new tenant's chips
+    mid-startup, and the teardown that follows would delete their lock and
+    open a claim window on it.
+    """
+    from gozer import keymaster as keymaster_mod
+    km, gk = make(tmp_path, sysfs)
+    resets = []
+    km.reset_runner = lambda argv, **kw: resets.append(argv) or _Ok()
+    grant = km.acquire("1", who="claude:stale", pid=1)
+    unit = grant.units[0]
+
+    def stealing_holders(proc_root, **kw):
+        # Stand in for the hundreds of milliseconds the real scan takes: the
+        # other agent reaps our lease and claims the unit while we are in here.
+        gk.release_unit(unit)
+        gk.claim_unit(unit, {"lease_id": "newtenant", "who": "claude:b"})
+        return {}
+
+    monkeypatch.setattr(keymaster_mod.procfd, "holders", stealing_holders)
+    ok, msg = km.release(grant.lease_id)
+
+    assert ok is False
+    assert resets == [], "reset ran against another lease's chips"
+    assert "newtenant" in msg
+    assert gk.unit_lease(unit)["lease_id"] == "newtenant"  # lock untouched
+
+
+def test_release_skips_the_reset_when_its_own_lock_is_already_gone(tmp_path, sysfs):
+    """A lease whose lock was already reaped is still cleanable, but must not
+    fire a reset: those chips are free for anyone to take right now, so a
+    reset would land on whoever grabs them next. The lease record is removed
+    so the caller is not left with an un-releasable id."""
+    calls = []
+    km, gk = make(tmp_path, sysfs)
+    km.reset_runner = lambda argv, **kw: calls.append(argv) or _Ok()
+    grant = km.acquire("1", who="claude:test", pid=1)
+    gk.release_unit(grant.units[0])  # reaped out from under us
+
+    ok, msg = km.release(grant.lease_id)
+
+    assert ok is True
+    assert calls == []
+    assert "not resetting" in msg
+    assert gk.read_lease(grant.lease_id) is None
+
+
+def test_release_does_not_hold_the_mutex_across_the_reset(tmp_path, sysfs):
+    """A reset takes tens of seconds. Holding the global mutex across it would
+    block every other user of the box for that whole time, so the gate is
+    revalidated under the lock and the lock is dropped before tt-smi runs."""
+    km, gk = make(tmp_path, sysfs)
+    held_during_reset = []
+
+    def watching_runner(argv, **kw):
+        mutex = os.path.join(gk.root, "mutex", ".gatekeeper.lock")
+        held_during_reset.append(os.path.isdir(mutex))
+        return _Ok()
+
+    km.reset_runner = watching_runner
+    grant = km.acquire("1", who="claude:test", pid=1)
+    km.release(grant.lease_id)
+
+    assert held_during_reset == [False]
+
+
 def test_run_releases_on_normal_exit(tmp_path, sysfs):
     km, gk = make(tmp_path, sysfs)
     km.reset_runner = lambda argv, **kw: _Ok()

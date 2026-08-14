@@ -121,7 +121,11 @@ class Keymaster:
                     for done in units:
                         if done == unit:
                             break
-                        self.gk.release_unit(done)
+                        # Ours by construction (claimed moments ago, in this
+                        # same critical section) -- but name the lease_id
+                        # anyway, so a rollback can never widen into deleting
+                        # a lock that is not this request's.
+                        self.gk.release_unit(done, expected_lease_id=lease_id)
                     return self._ticket_for(ticket, who, pid, min_chips, max_chips)
 
             # Every unit in the request is claimed now -- only at this point is
@@ -161,11 +165,49 @@ class Keymaster:
 
     # ---- release ----------------------------------------------------------
 
+    def _units_held_elsewhere(self, units: list[str],
+                              lease_id: str) -> dict[str, str]:
+        """Units whose gate lock now carries a *different* lease than ours.
+
+        A unit with no lock at all is deliberately not in here: that means
+        nobody holds it, so there is no other tenant to harm and our own
+        bookkeeping can still be cleaned up. Only a lock naming someone else
+        is the dangerous case -- see release().
+        """
+        out: dict[str, str] = {}
+        for unit in units:
+            current = self.gk.unit_lease(unit)
+            if current is not None and current.get("lease_id") != lease_id:
+                out[unit] = current.get("lease_id") or "unknown"
+        return out
+
     def release(self, lease_id: str, no_reset: bool = False,
                 force: bool = False) -> tuple[bool, str]:
+        """Give the chips back: verify, reset, unlock, notify the queue.
+
+        The ordering here is the whole point, and it is not obvious.
+
+        A lease record is not proof that the gate still holds it. Stale
+        leases get released by hand (the gatekeeper skill tells a human or a
+        successor agent to do exactly that), and `reconcile` reaps them
+        automatically -- after which another agent's `acquire` may already own
+        the unit. Meanwhile the /proc scan below takes hundreds of
+        milliseconds and `tt-smi -r` takes tens of seconds. Without
+        revalidation the sequence "read lease, scan /proc, reset" happily runs
+        a reset on someone else's chips mid-startup, then deletes their lock
+        and opens a claim window on it.
+
+        So the gate is re-read under the mutex immediately before the reset,
+        and again before the teardown -- but the mutex is deliberately NOT
+        held across the reset itself, which would block every other user of
+        the box for the tens of seconds tt-smi takes. The residual window
+        (between the second check and the actual unlink) is microseconds of
+        local file I/O, and release_unit's own lease_id guard covers it.
+        """
         lease = self.gk.read_lease(lease_id)
         if lease is None:
             return False, f"lease {lease_id} not found"
+        units = lease.get("units", [])
 
         fd_map = procfd.holders(self.gk.proc_root)
         still_open = [d for d in lease.get("dev_indices", []) if fd_map.get(d)]
@@ -175,25 +217,63 @@ class Keymaster:
                 f"{sorted({p for d in still_open for p in fd_map[d]})} -- "
                 "let the work finish, or pass --force")
 
+        # First revalidation: are these units still ours, right now, with
+        # nobody able to claim them while we look?
+        with self.gk.critical_section():
+            foreign = self._units_held_elsewhere(units, lease_id)
+            unheld = [u for u in units
+                      if self.gk.unit_lease(u) is None]
+        if foreign:
+            return False, (
+                "refusing to release: " +
+                ", ".join(f"{unit} now belongs to lease {other}"
+                          for unit, other in sorted(foreign.items())) +
+                f" -- lease {lease_id} was already reaped or released; "
+                "nothing was reset")
+
         messages = []
-        if not no_reset:
-            ok, out = reset_mod.reset_chips(lease["chips"], runner=self.reset_runner)
-            messages.append(out or ("reset ok" if ok else "reset failed"))
-            if ok:
-                for unit in lease.get("units", []):
-                    self.gk.mark_clean(unit)
-            else:
+        reset_ok = False
+        if unheld and not no_reset:
+            # Our lock is gone but nobody else has taken these units yet.
+            # Resetting now would fire at chips that are free for anyone to
+            # grab, so skip it and just clean up our own bookkeeping.
+            messages.append(
+                f"not resetting: {', '.join(sorted(unheld))} no longer locked "
+                f"by lease {lease_id} (already reaped?)")
+        elif not no_reset:
+            reset_ok, out = reset_mod.reset_chips(lease["chips"],
+                                                  runner=self.reset_runner)
+            messages.append(out or ("reset ok" if reset_ok else "reset failed"))
+            if not reset_ok:
                 messages.append("reset failed -- unit released but NOT marked clean")
 
-        for unit in lease.get("units", []):
-            self.gk.release_unit(unit)
-        self.gk.delete_lease(lease_id)
+        # Second revalidation: the reset above took real time, so re-check
+        # before deleting any lock or handing the chips to the queue.
+        with self.gk.critical_section():
+            foreign = self._units_held_elsewhere(units, lease_id)
+            if foreign:
+                return False, (
+                    "; ".join(messages + [
+                        "aborted before teardown: " +
+                        ", ".join(f"{unit} now belongs to lease {other}"
+                                  for unit, other in sorted(foreign.items())) +
+                        " -- leaving the new tenant's lock alone"]))
 
-        # Hand the freed chips to whoever is next in line.
-        head = self.gk.queue_entries()
-        if head:
-            self.gk.open_claim_window(head[0]["ticket"])
-            messages.append(f"claim window opened for {head[0]['who']}")
+            if reset_ok:
+                for unit in units:
+                    self.gk.mark_clean(unit)
+            for unit in units:
+                self.gk.release_unit(unit, expected_lease_id=lease_id)
+            self.gk.delete_lease(lease_id)
+
+            # Hand the freed chips to whoever is next in line. Prune first so
+            # a ticket whose waiter is demonstrably gone cannot be handed a
+            # 90-second exclusive window nobody will ever claim.
+            self.gk.prune_queue()
+            head = self.gk.queue_entries()
+            if head:
+                self.gk.open_claim_window(head[0]["ticket"])
+                messages.append(f"claim window opened for {head[0]['who']}")
 
         return True, "; ".join(m for m in messages if m)
 
