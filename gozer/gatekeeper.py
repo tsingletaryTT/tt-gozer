@@ -48,6 +48,11 @@ def parse_chip_request(spec: str, total: int) -> tuple[int, int]:
     "1" -> (1, 1)     exactly one
     "all" -> (total, total)
     "1-4" -> (1, 4)   elastic: at least 1, up to 4
+
+    A range's upper bound is silently clamped to `total`: "1-10" against a
+    4-chip machine yields (1, 4). An elastic request means "take what exists,"
+    not "fail because I overestimated," so asking for more than the machine
+    has is not an error.
     """
     spec = (spec or "").strip().lower()
     if spec == "all":
@@ -396,6 +401,15 @@ class Gatekeeper:
 
     def free_units(self) -> list[str]:
         """Units with no lease and no process holding any of their chips."""
+        # reconcile() defaults to reap=True, and that default must stay. Do
+        # not "simplify" this to reconcile(reap=False): a STALE lease (owning
+        # pid dead, no fd open, chips genuinely idle) would then keep its
+        # unit permanently out of the free set, because nothing else ever
+        # clears a stale lease.json off disk. One crashed agent would then
+        # wedge the whole box until a human ran `gozer reconcile` by hand --
+        # exactly the failure mode this tool exists to avoid. Reaping a
+        # lease whose owning process is gone is garbage collection, not
+        # claiming; it is what lets allocation self-heal after a crash.
         by_chip = {s.chip.bdf: s for s in self.reconcile()}
         free = []
         for unit in self.all_units():
@@ -419,7 +433,22 @@ class Gatekeeper:
 
     def allocate(self, min_chips: int, max_chips: int, exact: str | None = None,
                  fresh: bool = False) -> list[str] | None:
-        """Choose unit keys satisfying the request, or None. Does not claim."""
+        """Choose unit keys satisfying the request, or None.
+
+        Does not claim: it never calls claim_unit, so the returned keys are
+        not locked and can race against another allocate() call. Claiming is
+        the caller's job (Keymaster.acquire, Task 8), which is expected to
+        run this under critical_section so selection and claiming happen as
+        one atomic step from the outside.
+
+        It does, however, mutate disk indirectly: free_units() calls
+        reconcile() with its default reap=True, so any lease whose owning
+        process is gone and which holds no open fd is garbage-collected
+        (release_unit + delete_lease) as a side effect of asking "what's
+        free?". That's deliberate housekeeping, not selection -- see the
+        comment on free_units() -- but it does mean allocate() is not a pure
+        read: it can delete another tenant's dead lease file.
+        """
         free = self.free_units()
         if fresh:
             free = [u for u in free if self.is_clean(u)]

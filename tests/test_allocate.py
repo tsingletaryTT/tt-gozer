@@ -30,6 +30,10 @@ def make(tmp_path, sysfs, chips=QUIETBOX):
     ("all", 4, (4, 4)),
     ("1-4", 4, (1, 4)),
     ("2-3", 4, (2, 3)),
+    # An elastic upper bound beyond what the machine has is not an error --
+    # it clamps to what exists ("take everything you can") rather than
+    # raising ValueError.
+    ("1-10", 4, (1, 4)),
 ])
 def test_parse_chip_request(spec, total, expected):
     assert parse_chip_request(spec, total) == expected
@@ -67,6 +71,15 @@ def test_elastic_takes_what_is_available_above_the_minimum(tmp_path, sysfs):
     gk.claim_unit("0000046131924055", {"lease_id": "x", "pid": 1})
     units = gk.allocate(1, 4)  # only one board left
     assert units == ["0000046131924062"]
+
+
+def test_no_board_combination_may_overshoot_the_maximum(tmp_path, sysfs):
+    # QUIETBOX is two 2-chip boards. No combination of whole boards sums to
+    # exactly 3, and the overshoot guard must refuse to round up to 4 and
+    # hand the caller a chip they did not ask for -- it must return None
+    # instead of silently over-allocating.
+    gk = make(tmp_path, sysfs)
+    assert gk.allocate(3, 3) is None
 
 
 def test_prefers_the_lower_indexed_board_for_determinism(tmp_path, sysfs):
