@@ -336,6 +336,36 @@ sure a process is completely done, then reset and start clean.
 pre-existing work (like a manually started vLLM server) becomes visible to the queue
 instead of looking free.
 
+### Detached leases
+
+*Added during implementation, after the CLI exposed a hole in the rule above.*
+
+The reaping rule assumes a lease's `pid` is the workload's. That holds for `gozer run`,
+which owns its child. It does **not** hold for a standalone `gozer acquire`: that process
+prints the export line and exits immediately, so its recorded pid is dead within
+milliseconds. Reconciliation would then see a dead owner with no fd and reap a lease that
+was seconds old — the documented workflow (`acquire`, `eval "$(gozer env …)"`, start the
+workload) racing itself, with any concurrent `status` or `acquire` handing the chips away
+before the workload ever opened a device.
+
+Binding such leases to an always-alive pid "fixes" this by making them immortal, which is
+worse: one crashed agent then wedges the box permanently and no `reconcile` can recover it.
+
+So a lease acquired without an owning process is marked **detached**, and reconciliation
+treats it on its own terms:
+
+| Condition | State | Why |
+|---|---|---|
+| Any fd open on the chip | `HELD` | The workload started. Its pid is unknowable at acquire time, so a holder that is not the creating pid is expected — `HELD-FOREIGN` applies only to non-detached leases, where we do know who should hold it. |
+| No fd, within the grace window from `since` | `CLAIMED` | The acquire-to-workload-start gap. Legitimately minutes: a server can spend a long time loading weights before touching a device. |
+| No fd, past the grace window | `STALE` → reaped | Stops an abandoned `acquire` wedging the box. |
+
+`DETACHED_GRACE_SECONDS` defaults to 900. It is deliberately generous: reaping too early
+corrupts a live run, reaping too late costs a delay. `--expect` is **not** wired into it and
+remains advisory, never a reaper.
+
+`gozer run` is unaffected — it owns a real process and keeps exact pid semantics.
+
 ## Queue
 
 Tickets are FIFO by zero-padded sequence number. `acquire` never blocks: it returns a grant
