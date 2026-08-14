@@ -110,9 +110,13 @@ def test_reset_chips_env_override_when_cmd_is_none(monkeypatch):
     class Mock:
         returncode, stdout, stderr = 0, "", ""
 
-    ok, out = reset_chips(["0000:01:00.0"], cmd=None, runner=lambda *a, **k: Mock())
-    # argv[0] should be the env var value
-    assert ok is True
+    def capture_argv_runner(argv, *args, **kwargs):
+        # Store argv so we can check it
+        capture_argv_runner.last_argv = argv
+        return Mock()
+
+    reset_chips(["0000:01:00.0"], cmd=None, runner=capture_argv_runner)
+    assert capture_argv_runner.last_argv[0] == "/custom/tt-smi"
 
 
 def test_reset_chips_cmd_parameter_wins_over_env(monkeypatch):
