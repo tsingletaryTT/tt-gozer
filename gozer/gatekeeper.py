@@ -36,6 +36,7 @@ DEFAULT_ROOT = "/tmp/tt-gozer"
 MUTEX_SUBDIR = "mutex"
 MUTEX_DIR = ".gatekeeper.lock"
 MUTEX_STALE_SECONDS = 30
+CLAIM_WINDOW_SECONDS = 90
 
 
 def utcnow() -> str:
@@ -496,3 +497,123 @@ class Gatekeeper:
                 if lease:
                     out[chip.bdf] = lease.get("who", "unknown")
         return out
+
+    # ---- queue ------------------------------------------------------------
+
+    def _queue_dir(self) -> str:
+        return os.path.join(self.root, "queue")
+
+    def _next_seq(self) -> int:
+        entries = [e for e in os.listdir(self._queue_dir()) if e.endswith(".json")]
+        seqs = []
+        for e in entries:
+            head = e.split("-", 1)[0]
+            if head.isdigit():
+                seqs.append(int(head))
+        return (max(seqs) + 1) if seqs else 1
+
+    def enqueue(self, request: dict) -> dict:
+        """Append a ticket. Sequence numbers are zero-padded so 10 sorts after 9."""
+        with self.critical_section():
+            seq = self._next_seq()
+            ticket = secrets.token_hex(2)
+            record = dict(request)
+            record.update({"ticket": ticket, "seq": seq, "since": utcnow()})
+            path = os.path.join(self._queue_dir(), f"{seq:06d}-{ticket}.json")
+            _atomic_write_json(path, record)
+            return record
+
+    def queue_entries(self) -> list[dict]:
+        out = []
+        for entry in sorted(os.listdir(self._queue_dir())):
+            if not entry.endswith(".json"):
+                continue
+            rec = _read_json(os.path.join(self._queue_dir(), entry))
+            if rec:
+                out.append(rec)
+        return sorted(out, key=lambda r: r.get("seq", 0))
+
+    def _ticket_path(self, ticket: str) -> str | None:
+        for entry in os.listdir(self._queue_dir()):
+            if entry.endswith(f"-{ticket}.json"):
+                return os.path.join(self._queue_dir(), entry)
+        return None
+
+    def queue_position(self, ticket: str) -> int | None:
+        for i, rec in enumerate(self.queue_entries(), start=1):
+            if rec.get("ticket") == ticket:
+                return i
+        return None
+
+    def dequeue(self, ticket: str) -> None:
+        path = self._ticket_path(ticket)
+        if path:
+            with contextlib.suppress(OSError):
+                os.unlink(path)
+        if self._claim_window_ticket() == ticket:
+            self._close_claim_window()
+
+    def prune_queue(self) -> list[str]:
+        """Drop tickets whose creating process has exited."""
+        dropped = []
+        for rec in self.queue_entries():
+            pid = rec.get("pid")
+            if pid is not None and not procfd.pid_alive(pid, self.proc_root):
+                dropped.append(rec["ticket"])
+                self.dequeue(rec["ticket"])
+        return dropped
+
+    def _send_to_back(self, ticket: str) -> None:
+        path = self._ticket_path(ticket)
+        rec = _read_json(path) if path else None
+        if not rec:
+            return
+        with contextlib.suppress(OSError):
+            os.unlink(path)
+        seq = self._next_seq()
+        rec["seq"] = seq
+        rec["requeued_at"] = utcnow()
+        _atomic_write_json(
+            os.path.join(self._queue_dir(), f"{seq:06d}-{ticket}.json"), rec)
+
+    # ---- claim window -----------------------------------------------------
+
+    def _window_path(self) -> str:
+        return os.path.join(self._queue_dir(), ".claim-window")
+
+    def _claim_window_ticket(self) -> str | None:
+        try:
+            with open(self._window_path()) as f:
+                return f.read().strip() or None
+        except OSError:
+            return None
+
+    def _close_claim_window(self) -> None:
+        with contextlib.suppress(OSError):
+            os.unlink(self._window_path())
+
+    def open_claim_window(self, ticket: str) -> None:
+        """Give this ticket an exclusive window to claim the freed chips."""
+        with open(self._window_path(), "w") as f:
+            f.write(ticket + "\n")
+
+    def claim_window_holder(self) -> str | None:
+        """The entitled ticket, or None. An expired window sends its ticket
+        to the back of the queue so a dead waiter cannot block everyone."""
+        ticket = self._claim_window_ticket()
+        if ticket is None:
+            return None
+        try:
+            age = time.time() - os.stat(self._window_path()).st_mtime
+        except OSError:
+            return None
+        if age > CLAIM_WINDOW_SECONDS:
+            self._close_claim_window()
+            self._send_to_back(ticket)
+            return None
+        return ticket
+
+    def may_claim(self, ticket: str | None) -> bool:
+        """True when no window is open, or this ticket owns it."""
+        holder = self.claim_window_holder()
+        return holder is None or holder == ticket
