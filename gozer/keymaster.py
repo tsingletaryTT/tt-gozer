@@ -57,7 +57,19 @@ class Keymaster:
                 exact: str | None = None, fresh: bool = False,
                 expect: str | None = None, pid: int | None = None,
                 ticket: str | None = None):
-        """Return a Grant, or a queue-ticket dict when nothing is available."""
+        """Return a Grant, or a queue-ticket dict when nothing is available.
+
+        A caller that supplies no `pid` is producing a *detached* lease: one
+        with no process gozer can supervise (the bare `gozer acquire` CLI
+        path -- it prints its export line and exits immediately, so its own
+        pid is meaningless a moment later). `detached` is recorded on the
+        resulting lease and drives how Gatekeeper.reconcile decides CLAIMED
+        vs STALE for leases with no fd open yet (see DETACHED_GRACE_SECONDS).
+        `gozer run` legitimately owns a live, supervised process for the
+        lease's whole lifetime, so it passes its own pid explicitly (see
+        Keymaster.run) and gets ordinary process-death detection instead.
+        """
+        detached = pid is None
         pid = pid if pid is not None else os.getpid()
         total = len(all_chips(self.gk.boards))
         min_chips, max_chips = parse_chip_request(chips_spec, total)
@@ -88,6 +100,7 @@ class Keymaster:
                 "host": socket.gethostname(),
                 "pid": pid,
                 "pgid": _pgid(pid),
+                "detached": detached,
                 "session": os.environ.get("CLAUDE_SESSION_ID", ""),
                 "cwd": os.getcwd(),
                 "reason": reason,
@@ -226,6 +239,14 @@ class Keymaster:
         reliably -- and that race is exactly where the unblock-placement bug
         this seam regression-tests was found twice.
         """
+        # run() supervises a real, live child for the lease's whole lifetime
+        # (this very process blocks in proc.wait() below), so -- unless a
+        # caller already passed one explicitly (tests do, with pid=1) -- it
+        # is exactly the case Keymaster.acquire's `detached` distinction
+        # means for a *non*-detached lease: record this process's own pid so
+        # reconcile can use ordinary process-death detection instead of the
+        # detached grace window.
+        acquire_kwargs.setdefault("pid", os.getpid())
         sigs = (signal.SIGINT, signal.SIGTERM)
         previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, sigs)
         try:

@@ -189,3 +189,36 @@ def test_status_never_opens_a_device_node(env, capsys, monkeypatch):
     monkeypatch.setattr("builtins.open", watching_open)
     run(["status"], capsys)
     assert not any(p.startswith("/dev/tenstorrent") for p in opened)
+
+
+def test_acquire_then_status_reports_the_lease_still_held(tmp_path, sysfs, monkeypatch, capsys):
+    """The workflow that was actually broken: `acquire`, then some other
+    command reconciles (here, `status`) before anything has opened the
+    device. Deliberately does NOT reuse the `env` fixture above, whose fake
+    /proc happens to register pid "1" as alive -- that would let a
+    fixed-sentinel-pid "fix" pass this test by coincidence rather than by
+    being structurally correct. This fixture's /proc is simply empty, the
+    way a fresh box's `/proc` won't happen to contain whatever fixed pid a
+    lease might be bound to.
+    """
+    monkeypatch.setenv("GOZER_ROOT", str(tmp_path / "state"))
+    monkeypatch.setenv("GOZER_SYSFS_ROOT", sysfs(QUIETBOX))
+    proc_root = tmp_path / "proc"
+    proc_root.mkdir()
+    monkeypatch.setenv("GOZER_PROC_ROOT", str(proc_root))
+    monkeypatch.setenv("GOZER_RESET_CMD", "/bin/true")
+
+    code, out = run(["acquire", "--chips", "1", "--who", "claude:test", "--json"], capsys)
+    assert code == 0
+    lease_id = json.loads(out)["lease_id"]
+
+    code, out = run(["status", "--json"], capsys)
+    assert code == 0
+    chips = json.loads(out)["chips"]
+    states = {c["dev_index"]: c["state"] for c in chips}
+    assert states[0] == "CLAIMED" and states[1] == "CLAIMED"
+    assert "STALE" not in states.values()
+
+    # And the lease record itself must still be there -- not silently reaped.
+    _, out = run(["env", lease_id], capsys)
+    assert out.startswith("export TT_VISIBLE_DEVICES=")

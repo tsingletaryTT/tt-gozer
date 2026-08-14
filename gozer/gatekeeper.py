@@ -26,6 +26,7 @@ import os
 import secrets
 import time
 from dataclasses import dataclass
+from datetime import datetime
 
 from gozer import procfd
 from gozer.jsonstore import _atomic_write_json, _read_json, utcnow
@@ -36,6 +37,37 @@ DEFAULT_ROOT = "/tmp/tt-gozer"
 MUTEX_SUBDIR = "mutex"
 MUTEX_DIR = ".gatekeeper.lock"
 MUTEX_STALE_SECONDS = 30
+
+# A detached lease (one created by a bare `gozer acquire`, with no live
+# process for gozer to supervise -- see Keymaster.acquire's `detached` field)
+# cannot be judged by process-death detection: the pid it records is whoever
+# happened to run the one-shot CLI command, purely informational, and is
+# usually already gone by the time anyone reconciles. Binding a detached
+# lease's fate to a fixed "always alive" pid (init/systemd) was tried and
+# rejected: it makes such leases immortal, so one crashed/abandoned agent
+# wedges the box forever with no `gozer reconcile` able to recover it. Instead
+# a detached lease is judged purely by elapsed wall-clock time since it was
+# created: CLAIMED while within this grace window, STALE (and reaped) once
+# past it. 15 minutes is deliberately generous -- it needs to cover the gap
+# between `acquire` and the workload actually opening a device, which for
+# something like a vLLM server loading multi-GB weights can itself take
+# minutes. Reaping too early risks corrupting a live run that just hasn't
+# opened its device yet; reaping too late only delays the next tenant by the
+# same margin. This is separate from -- and never wired into -- `expect_done`,
+# which stays advisory and never reaps on its own (see the design spec).
+DETACHED_GRACE_SECONDS = 900
+
+
+def _elapsed_seconds(since: str, now: str) -> float:
+    """Seconds between two utcnow()-formatted timestamps.
+
+    Both `since` and `now` are the fixed "%Y-%m-%dT%H:%M:%SZ" format every
+    lease timestamp in this codebase uses (see jsonstore.utcnow), so a plain
+    strptime-and-subtract is exact -- no timezone-library dependency needed.
+    """
+    fmt = "%Y-%m-%dT%H:%M:%SZ"
+    return (datetime.strptime(now, fmt) - datetime.strptime(since, fmt)).total_seconds()
+
 
 # Re-exported so `from gozer.gatekeeper import CLAIM_WINDOW_SECONDS` (used by
 # tests/test_queue.py) keeps working now that the constant's home is
@@ -353,6 +385,12 @@ class Gatekeeper:
         process is *gone* and no fd remains. A live process that has run past its
         advisory expect_done is reported OVERSTAYED and left strictly alone --
         never be greedy, make sure a process is completely done.
+
+        A `detached` lease (see Keymaster.acquire) has no process to check for
+        death at all -- its recorded pid is informational only, left over from
+        whichever one-shot CLI invocation created it. Such a lease is judged by
+        DETACHED_GRACE_SECONDS elapsed since its `since` timestamp instead of by
+        pid_alive; see that constant's comment for why.
         """
         fd_map = procfd.holders(self.proc_root, use_sudo=self.use_sudo)
         held = self.held_units()
@@ -373,11 +411,32 @@ class Gatekeeper:
 
             owner = lease.get("pid")
             owner_pgid = lease.get("pgid")
+            detached = bool(lease.get("detached"))
             overstayed = bool(lease.get("expect_done")) and lease["expect_done"] < now
 
             if pids:
-                owned = any(p == owner or p == owner_pgid for p in pids)
-                state = "HELD" if owned else "HELD-FOREIGN"
+                if detached:
+                    # The eventual workload's real pid was never knowable at
+                    # acquire time, so any holder at all is exactly what a
+                    # detached lease expects -- never "foreign". HELD-FOREIGN
+                    # stays reachable only for a non-detached lease (e.g.
+                    # `gozer run`), where we really do know who should hold it.
+                    state = "HELD"
+                else:
+                    owned = any(p == owner or p == owner_pgid for p in pids)
+                    state = "HELD" if owned else "HELD-FOREIGN"
+            elif detached:
+                since = lease.get("since")
+                # A lease missing `since` entirely is malformed data, not a
+                # legitimate fresh acquire; treat it as maximally old rather
+                # than trust it indefinitely.
+                elapsed = _elapsed_seconds(since, now) if since else float("inf")
+                if elapsed <= DETACHED_GRACE_SECONDS:
+                    state = "CLAIMED"
+                else:
+                    state = "STALE"
+                    if (unit, lease) not in reapable:
+                        reapable.append((unit, lease))
             elif owner is not None and procfd.pid_alive(owner, self.proc_root):
                 state = "CLAIMED"
             else:

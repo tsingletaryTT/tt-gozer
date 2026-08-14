@@ -116,23 +116,16 @@ def _render_grant(grant: Grant, gk) -> str:
 
 def cmd_acquire(args) -> int:
     gk, km = _make(args)
-    # pid=1 (init/systemd -- guaranteed alive for the machine's whole lifetime)
-    # is a deliberate sentinel, not the CLI's own os.getpid(). A bare `gozer
-    # acquire` invocation is a one-shot process: it prints the export line and
-    # exits immediately, often before any other command ever calls reconcile()
-    # again. If the lease recorded *that* transient pid as owner, the very
-    # next reconcile (e.g. the next `acquire`/`status`/`wait`) would find the
-    # owner dead, no fd open yet, and reap it as STALE -- silently handing the
-    # just-granted chips to someone else before the caller's shell even had a
-    # chance to use them. Recording pid=1 keeps the lease CLAIMED (never
-    # auto-reaped by process-death detection) until the caller explicitly
-    # releases it, force-releases it, or lets `expect_done` flag it
-    # OVERSTAYED. `gozer run` is the supervised alternative: it keeps a real,
-    # live process running for the lease's whole lifetime, so it can and does
-    # let Keymaster.run's own os.getpid() default track that real pid.
+    # No `pid` is passed here: a bare `gozer acquire` has no process for
+    # gozer to supervise (it prints its export line and exits immediately),
+    # so Keymaster.acquire records this as a *detached* lease. See its
+    # docstring and Gatekeeper.reconcile's DETACHED_GRACE_SECONDS handling --
+    # a fixed sentinel pid (e.g. always-alive init) was tried and rejected,
+    # since that makes a detached lease immortal instead of just outliving
+    # the one-shot CLI process that created it.
     result = km.acquire(args.chips, who=args.who, reason=args.reason,
                         exact=args.exact, fresh=args.fresh, expect=args.expect,
-                        ticket=args.ticket, pid=1)
+                        ticket=args.ticket)
     if isinstance(result, Grant):
         payload = {
             "granted": True, "lease_id": result.lease_id, "units": result.units,
@@ -171,12 +164,12 @@ def cmd_wait(args) -> int:
                   f"ticket {args.ticket} is no longer queued", args.json)
             return EXIT_NO_LEASE
         if gk.may_claim(args.ticket):
-            # Same pid=1 sentinel as cmd_acquire (see its comment): `wait`
-            # claims on behalf of whichever CLI invocation originally
-            # enqueued the ticket, and that invocation is long gone by now.
+            # No explicit pid here either -- same detached lease as
+            # cmd_acquire (see its comment). `wait` claims on behalf of
+            # whichever CLI invocation originally enqueued the ticket, and
+            # that invocation is long gone by now.
             result = km.acquire(f"{entry['min_chips']}-{entry['max_chips']}",
-                                who=entry["who"], ticket=args.ticket,
-                                pid=entry.get("pid", 1))
+                                who=entry["who"], ticket=args.ticket)
             if isinstance(result, Grant):
                 payload = {"granted": True, "lease_id": result.lease_id,
                            "chips": result.bdfs, "env": km.env_for(result)}
