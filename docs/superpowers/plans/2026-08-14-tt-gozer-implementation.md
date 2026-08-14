@@ -1156,9 +1156,25 @@ from gozer.gatekeeper import Gatekeeper, parse_chip_request, utcnow
 from conftest import QUIETBOX, GALAXY_LIKE
 
 
+def fake_proc(tmp_path, live_pids=(1,)):
+    """A /proc where the given pids exist and hold nothing open.
+
+    pid 1 must be alive here: several tests below plant a lease owned by pid 1,
+    and free_units() reconciles first. Against an empty/absent proc tree that
+    pid reads as dead, reconcile reaps the lease as STALE, and the very
+    contention those tests are asserting silently disappears.
+    """
+    root = tmp_path / "proc"
+    root.mkdir(parents=True, exist_ok=True)
+    for pid in live_pids:
+        (root / str(pid) / "fd").mkdir(parents=True, exist_ok=True)
+        (root / str(pid) / "comm").write_text("python\n")
+    return str(root)
+
+
 def make(tmp_path, sysfs, chips=QUIETBOX):
     return Gatekeeper(root=str(tmp_path / "state"), sysfs_root=sysfs(chips),
-                      proc_root=str(tmp_path / "empty-proc"))
+                      proc_root=fake_proc(tmp_path))
 
 
 @pytest.mark.parametrize("spec,total,expected", [
