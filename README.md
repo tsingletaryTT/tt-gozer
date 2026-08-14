@@ -6,11 +6,6 @@ aider, shell scripts, cron jobs — can share one machine without corrupting eac
 A lease says *who* is using *which chips* and *why*. The kernel says whether that's actually
 true. When those two disagree, the kernel wins.
 
-> **Status:** under active development. The library is complete and tested (topology,
-> reconciliation, allocation, queue, reset, leasing). The `gozer` command-line front end and
-> the installer are the next two pieces of work — until they land, the CLI examples below
-> describe the intended surface rather than something you can run today.
-
 ## The problem
 
 One box, several agents. Nothing coordinates them, so two Claude sessions — or a session and
@@ -159,15 +154,24 @@ Six states, derived from comparing the lease files against the kernel:
 |---|---|---|---|
 | ✓ | by the owner | `HELD` | working as intended |
 | ✓ | by someone else | `HELD-FOREIGN` | the lease is lying — investigate |
-| ✓ | none, owner alive | `CLAIMED` | setup phase, or between runs |
-| ✓ | none, owner gone | `STALE` | reaped |
+| ✓ | none, owner alive (or, for a detached lease, still inside its 900s grace window) | `CLAIMED` | setup phase, or between runs |
+| ✓ | none, owner gone (or, for a detached lease, its 900s grace window elapsed) | `STALE` | reaped |
 | ✗ | yes | `BUSY-UNTRACKED` | untracked work — never handed out |
 | ✗ | none | `FREE` | allocatable |
 
-Reaping is deliberately conservative: a lease is removed only when its process is **gone**
-*and* no file descriptor remains. A live process that has run past its advisory `--expect` is
-flagged `OVERSTAYED` and left strictly alone. Nothing here is in a hurry to take hardware
-away from something that might still be using it.
+A *detached* lease is one with no supervised process — a bare `gozer acquire` rather than
+`gozer run` — so there is no pid whose death reconciliation can watch for. Such a lease is
+judged instead by a fixed 900-second grace window from the moment it was acquired: `CLAIMED`
+until the window elapses or a fd opens, `HELD` as soon as anything opens the device (any
+holder counts, so `HELD-FOREIGN` never applies to it), and reaped as `STALE` if the window
+elapses with the device still unopened. `gozer run`'s lease is never detached, since its
+process is supervised for the lease's whole lifetime.
+
+Reaping is deliberately conservative: a non-detached lease is removed only when its process is
+**gone** *and* no file descriptor remains; a detached lease is removed only once its grace
+window has elapsed with no fd ever opened. A live process that has run past its advisory
+`--expect` is flagged `OVERSTAYED` and left strictly alone. Nothing here is in a hurry to take
+hardware away from something that might still be using it.
 
 ## State format
 
