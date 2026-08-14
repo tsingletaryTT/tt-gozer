@@ -1,4 +1,5 @@
 import os
+import pytest
 from gozer.procfd import holders, pid_alive, process_name
 
 
@@ -37,11 +38,34 @@ def test_ignores_unreadable_pid_dirs(tmp_path):
     # Another user's process: /proc/<pid>/fd exists but is not listable.
     # We must skip it, not crash. This is the documented same-user limitation.
     p = fake_proc(tmp_path, {100: ("a", [1])})
-    os.chmod(os.path.join(p, "100", "fd"), 0o000)
+    fd_dir = os.path.join(p, "100", "fd")
+    os.chmod(fd_dir, 0o000)
+    # If running as root, chmod 000 does not actually deny access.
+    # Skip the test in that case with a clear reason.
+    if os.access(fd_dir, os.R_OK):
+        pytest.skip("running as root; chmod 000 does not deny access")
     try:
         assert holders(p) == {}
     finally:
-        os.chmod(os.path.join(p, "100", "fd"), 0o755)
+        os.chmod(fd_dir, 0o755)
+
+
+def test_permission_error_on_fd_dir_is_skipped(tmp_path, monkeypatch):
+    # Test that PermissionError on fd listing is caught and skipped.
+    # This deterministically exercises the error-handling branch that works
+    # in any context (root or not) and proves it is taken.
+    p = fake_proc(tmp_path, {100: ("a", [1])})
+
+    # Monkeypatch os.listdir to raise PermissionError only for this pid's fd dir.
+    original_listdir = os.listdir
+    def patched_listdir(path):
+        if path.endswith("100/fd"):
+            raise PermissionError("mock: permission denied")
+        return original_listdir(path)
+    monkeypatch.setattr(os, "listdir", patched_listdir)
+
+    # When fd is not listable, holders() must skip it and return empty.
+    assert holders(p) == {}
 
 
 def test_pid_alive_and_name(tmp_path):

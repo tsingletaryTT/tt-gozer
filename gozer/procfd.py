@@ -45,6 +45,7 @@ def holders(proc_root: str = "/proc") -> dict[int, list[int]]:
             if not target.startswith(DEV_PREFIX):
                 continue
             suffix = target[len(DEV_PREFIX):]
+            # isdigit() accepts non-canonical forms like "007", but kernel-generated paths are well-formed.
             if suffix.isdigit():
                 found.setdefault(int(suffix), set()).add(pid)
 
