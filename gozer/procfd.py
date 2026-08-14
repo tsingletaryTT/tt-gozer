@@ -14,18 +14,68 @@ disturb a running workload.
 
 from __future__ import annotations
 
+import json
 import os
+import shlex
+import subprocess
+import sys
 
 DEV_PREFIX = "/dev/tenstorrent/"
+SUDO_SCAN_TIMEOUT = 10
 
 
-def holders(proc_root: str = "/proc") -> dict[int, list[int]]:
-    """Map device index -> sorted pids holding it open."""
+def sudo_available() -> bool:
+    """True when passwordless sudo works right now.
+
+    `sudo -n true` never prompts: it fails immediately if credentials would be
+    required. That matters because gozer runs under agents with no terminal to
+    type a password into.
+    """
+    try:
+        proc = subprocess.run(["sudo", "-n", "true"], capture_output=True,
+                              timeout=SUDO_SCAN_TIMEOUT)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return proc.returncode == 0
+
+
+def _sudo_holders(proc_root: str, runner=subprocess.run) -> dict[int, list[int]]:
+    """Re-run this module's own scan under sudo to see other users' processes.
+
+    /proc/<pid>/fd is readable only by its owner, so an unprivileged scan sees
+    only our own processes. Rather than shelling out to lsof (not always
+    installed) we re-execute this file with the same interpreter under sudo and
+    read back its JSON.
+    """
+    argv = ["sudo", "-n", sys.executable, os.path.abspath(__file__),
+            "--scan", proc_root]
+    try:
+        proc = runner(argv, capture_output=True, text=True,
+                      timeout=SUDO_SCAN_TIMEOUT)
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    if proc.returncode != 0 or not proc.stdout.strip():
+        return {}
+    try:
+        raw = json.loads(proc.stdout)
+    except ValueError:
+        return {}
+    return {int(k): sorted(v) for k, v in raw.items()}
+
+
+def holders(proc_root: str = "/proc", use_sudo: bool = False,
+            runner=None) -> dict[int, list[int]]:
+    """Map device index -> sorted pids holding it open.
+
+    With use_sudo, merge in an elevated scan so other users' processes are
+    visible too. The unprivileged scan still runs first, so an unavailable
+    sudo degrades to same-user truth instead of to an empty result.
+    """
     found: dict[int, set[int]] = {}
     try:
         entries = os.listdir(proc_root)
     except OSError:
-        return {}
+        entries = []
 
     for entry in entries:
         if not entry.isdigit():
@@ -49,7 +99,13 @@ def holders(proc_root: str = "/proc") -> dict[int, list[int]]:
             if suffix.isdigit():
                 found.setdefault(int(suffix), set()).add(pid)
 
-    return {dev: sorted(pids) for dev, pids in sorted(found.items())}
+    result = {dev: sorted(pids) for dev, pids in sorted(found.items())}
+
+    if use_sudo:
+        for dev, pids in _sudo_holders(
+                proc_root, **({"runner": runner} if runner else {})).items():
+            result[dev] = sorted(set(result.get(dev, [])) | set(pids))
+    return dict(sorted(result.items()))
 
 
 def pid_alive(pid: int, proc_root: str = "/proc") -> bool:
@@ -62,3 +118,13 @@ def process_name(pid: int, proc_root: str = "/proc") -> str:
             return f.read().strip()
     except OSError:
         return ""
+
+
+if __name__ == "__main__":
+    # Invoked as `sudo python3 procfd.py --scan /proc` by _sudo_holders above.
+    # Prints the same mapping as holders(), as JSON, for the parent to merge.
+    import sys as _sys
+    if len(_sys.argv) == 3 and _sys.argv[1] == "--scan":
+        print(json.dumps({str(k): v for k, v in holders(_sys.argv[2]).items()}))
+    else:
+        _sys.exit(2)

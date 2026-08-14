@@ -74,3 +74,66 @@ def test_pid_alive_and_name(tmp_path):
     assert pid_alive(888, p) is False
     assert process_name(777, p) == "vllm"
     assert process_name(888, p) == ""
+
+
+def test_sudo_available_is_false_when_sudo_refuses(monkeypatch):
+    import subprocess as sp
+    from gozer import procfd
+
+    class Refused:
+        returncode = 1
+
+    monkeypatch.setattr(sp, "run", lambda *a, **k: Refused())
+    assert procfd.sudo_available() is False
+
+
+def test_sudo_available_is_false_when_sudo_is_missing(monkeypatch):
+    import subprocess as sp
+    from gozer import procfd
+
+    def boom(*a, **k):
+        raise FileNotFoundError("no sudo here")
+
+    monkeypatch.setattr(sp, "run", boom)
+    assert procfd.sudo_available() is False
+
+
+def test_sudo_scan_uses_non_interactive_flag(tmp_path):
+    """An agent has no terminal; sudo must never be able to prompt."""
+    from gozer import procfd
+    seen = {}
+
+    class Ok:
+        returncode, stdout, stderr = 0, "{}", ""
+
+    def capture(argv, **kw):
+        seen["argv"] = argv
+        return Ok()
+
+    procfd.holders(str(tmp_path), use_sudo=True, runner=capture)
+    assert seen["argv"][:2] == ["sudo", "-n"]
+
+
+def test_sudo_results_merge_with_unprivileged_scan(tmp_path):
+    from gozer import procfd
+    p = fake_proc(tmp_path, {100: ("mine", [1])})
+
+    class Ok:
+        returncode = 0
+        stdout = '{"1": [200], "2": [300]}'
+        stderr = ""
+
+    merged = procfd.holders(p, use_sudo=True, runner=lambda *a, **k: Ok())
+    assert merged == {1: [100, 200], 2: [300]}
+
+
+def test_failed_sudo_degrades_to_same_user_truth(tmp_path):
+    """Losing the elevated scan must not lose the scan we could do."""
+    from gozer import procfd
+    p = fake_proc(tmp_path, {100: ("mine", [1])})
+
+    class Failed:
+        returncode, stdout, stderr = 1, "", "sudo: a password is required"
+
+    assert procfd.holders(p, use_sudo=True,
+                          runner=lambda *a, **k: Failed()) == {1: [100]}

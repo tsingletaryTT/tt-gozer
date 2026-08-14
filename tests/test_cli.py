@@ -1,0 +1,191 @@
+import json
+import os
+import pytest
+from gozer.cli import main
+from conftest import QUIETBOX
+
+
+@pytest.fixture
+def env(tmp_path, sysfs, monkeypatch):
+    proc = tmp_path / "proc" / "1" / "fd"
+    proc.mkdir(parents=True)
+    (tmp_path / "proc" / "1" / "comm").write_text("python\n")
+    monkeypatch.setenv("GOZER_ROOT", str(tmp_path / "state"))
+    monkeypatch.setenv("GOZER_SYSFS_ROOT", sysfs(QUIETBOX))
+    monkeypatch.setenv("GOZER_PROC_ROOT", str(tmp_path / "proc"))
+    monkeypatch.setenv("GOZER_RESET_CMD", "/bin/true")
+    return tmp_path
+
+
+def run(argv, capsys):
+    code = main(argv)
+    return code, capsys.readouterr().out
+
+
+def test_status_json_lists_every_chip_free(env, capsys):
+    code, out = run(["status", "--json"], capsys)
+    assert code == 0
+    data = json.loads(out)
+    assert len(data["chips"]) == 4
+    assert {c["state"] for c in data["chips"]} == {"FREE"}
+
+
+def test_status_human_output_names_boards_and_chips(env, capsys):
+    code, out = run(["status"], capsys)
+    assert code == 0
+    assert "0000000000000001" in out
+    assert "chip 0" in out and "FREE" in out
+
+
+def test_topology_reports_grain(env, capsys):
+    code, out = run(["topology", "--json"], capsys)
+    assert json.loads(out)["grain"] == "board"
+
+
+def test_acquire_prints_the_export_line_and_exits_zero(env, capsys):
+    code, out = run(["acquire", "--chips", "1", "--who", "claude:test"], capsys)
+    assert code == 0
+    assert "export TT_VISIBLE_DEVICES=" in out
+    assert "0000:" in out
+
+
+def test_acquire_notes_the_board_expansion(env, capsys):
+    code, out = run(["acquire", "--chips", "1", "--who", "claude:test"], capsys)
+    assert "expand" in out.lower() or "whole" in out.lower()
+
+
+def test_acquire_json_is_machine_readable(env, capsys):
+    code, out = run(["acquire", "--chips", "1", "--who", "x", "--json"], capsys)
+    data = json.loads(out)
+    assert data["granted"] is True
+    assert data["env"]["TT_VISIBLE_DEVICES"].count(",") == 1
+
+
+def test_third_acquire_exits_10_with_a_ticket(env, capsys):
+    run(["acquire", "--chips", "1", "--who", "a"], capsys)
+    run(["acquire", "--chips", "1", "--who", "b"], capsys)
+    code, out = run(["acquire", "--chips", "1", "--who", "c", "--json"], capsys)
+    assert code == 10
+    assert json.loads(out)["ticket"]
+
+
+def test_summon_is_an_alias_for_acquire(env, capsys):
+    code, out = run(["summon", "--chips", "1", "--who", "claude:test"], capsys)
+    assert code == 0 and "export TT_VISIBLE_DEVICES=" in out
+
+
+def test_release_frees_the_board(env, capsys):
+    _, out = run(["acquire", "--chips", "1", "--who", "x", "--json"], capsys)
+    lease = json.loads(out)["lease_id"]
+    code, _ = run(["release", lease], capsys)
+    assert code == 0
+    _, status = run(["status", "--json"], capsys)
+    assert {c["state"] for c in json.loads(status)["chips"]} == {"FREE"}
+
+
+def test_banish_is_an_alias_for_release(env, capsys):
+    _, out = run(["acquire", "--chips", "1", "--who", "x", "--json"], capsys)
+    lease = json.loads(out)["lease_id"]
+    assert run(["banish", lease], capsys)[0] == 0
+
+
+def test_release_of_unknown_lease_exits_13(env, capsys):
+    code, _ = run(["release", "nosuch"], capsys)
+    assert code == 13
+
+
+def test_env_prints_export_lines_for_a_lease(env, capsys):
+    _, out = run(["acquire", "--chips", "1", "--who", "x", "--json"], capsys)
+    lease = json.loads(out)["lease_id"]
+    code, text = run(["env", lease], capsys)
+    assert code == 0 and text.startswith("export TT_VISIBLE_DEVICES=")
+
+
+def test_queue_lists_waiting_requests(env, capsys):
+    run(["acquire", "--chips", "all", "--who", "hog"], capsys)
+    run(["acquire", "--chips", "1", "--who", "waiter"], capsys)
+    code, out = run(["queue", "--json"], capsys)
+    assert code == 0
+    assert json.loads(out)["queue"][0]["who"] == "waiter"
+
+
+def test_cancel_removes_a_ticket(env, capsys):
+    run(["acquire", "--chips", "all", "--who", "hog"], capsys)
+    _, out = run(["acquire", "--chips", "1", "--who", "w", "--json"], capsys)
+    ticket = json.loads(out)["ticket"]
+    assert run(["cancel", ticket], capsys)[0] == 0
+    _, q = run(["queue", "--json"], capsys)
+    assert json.loads(q)["queue"] == []
+
+
+def test_adopt_wraps_a_lease_around_untracked_work(env, capsys, tmp_path):
+    # Simulate a manually started server holding chips 0 and 1.
+    fd = tmp_path / "proc" / "1" / "fd"
+    os.symlink("/dev/tenstorrent/0", fd / "3")
+    os.symlink("/dev/tenstorrent/1", fd / "4")
+    _, before = run(["status", "--json"], capsys)
+    assert "BUSY-UNTRACKED" in before
+    code, _ = run(["adopt", "0", "--who", "manual:vllm"], capsys)
+    assert code == 0
+    _, after = run(["status", "--json"], capsys)
+    states = {c["dev_index"]: c["state"] for c in json.loads(after)["chips"]}
+    assert states[0] == "HELD" and states[1] == "HELD"
+
+
+def test_wait_times_out_and_exits_11(env, capsys):
+    run(["acquire", "--chips", "all", "--who", "hog"], capsys)
+    _, out = run(["acquire", "--chips", "1", "--who", "w", "--json"], capsys)
+    ticket = json.loads(out)["ticket"]
+    code, _ = run(["wait", ticket, "--timeout", "1s"], capsys)
+    assert code == 11
+
+
+def test_unreadable_topology_exits_14(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("GOZER_ROOT", str(tmp_path / "state"))
+    monkeypatch.setenv("GOZER_SYSFS_ROOT", str(tmp_path / "nothing"))
+    code, _ = run(["status"], capsys)
+    assert code == 14
+
+
+def test_reconcile_sudo_flag_reaches_the_scan(env, capsys, monkeypatch):
+    """--sudo must actually change behaviour, not just be accepted."""
+    from gozer import procfd
+    seen = {}
+    real = procfd.holders
+
+    def spy(proc_root="/proc", use_sudo=False, **kw):
+        seen["use_sudo"] = use_sudo
+        return real(proc_root)
+
+    monkeypatch.setattr(procfd, "holders", spy)
+    code, _ = run(["reconcile", "--sudo"], capsys)
+    assert code == 0
+    assert seen["use_sudo"] is True
+
+
+def test_reconcile_without_sudo_does_not_elevate(env, capsys, monkeypatch):
+    from gozer import procfd
+    seen = {}
+    real = procfd.holders
+
+    def spy(proc_root="/proc", use_sudo=False, **kw):
+        seen["use_sudo"] = use_sudo
+        return real(proc_root)
+
+    monkeypatch.setattr(procfd, "holders", spy)
+    run(["reconcile"], capsys)
+    assert seen["use_sudo"] is False
+
+
+def test_status_never_opens_a_device_node(env, capsys, monkeypatch):
+    """Hard guard on the core safety promise of this tool."""
+    real_open = open
+    opened = []
+
+    def watching_open(path, *a, **k):
+        opened.append(str(path))
+        return real_open(path, *a, **k)
+
+    monkeypatch.setattr("builtins.open", watching_open)
+    run(["status"], capsys)
+    assert not any(p.startswith("/dev/tenstorrent") for p in opened)

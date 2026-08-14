@@ -88,6 +88,8 @@ class Gatekeeper:
         self.root = root or os.environ.get("GOZER_ROOT") or DEFAULT_ROOT
         self.sysfs_root = sysfs_root
         self.proc_root = proc_root
+        # Set by cmd_reconcile when --sudo is passed; see procfd.holders().
+        self.use_sudo = False
         # Reentrancy depth for critical_section(): >0 means this process
         # already holds the mutex, so a nested call must not try to take
         # the filesystem lock again. See critical_section's docstring.
@@ -352,7 +354,7 @@ class Gatekeeper:
         advisory expect_done is reported OVERSTAYED and left strictly alone --
         never be greedy, make sure a process is completely done.
         """
-        fd_map = procfd.holders(self.proc_root)
+        fd_map = procfd.holders(self.proc_root, use_sudo=self.use_sudo)
         held = self.held_units()
         now = utcnow()
 
