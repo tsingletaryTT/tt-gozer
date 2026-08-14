@@ -1702,6 +1702,123 @@ can wedge the queue."
 
 ---
 
+### Task 6b: Extract the queue into its own module
+
+*Added by controller ruling during execution, on an informed reviewer recommendation.*
+`gozer/gatekeeper.py` reached 619 lines spanning nine concerns — layout, the mkdir
+primitive, lease records, the global mutex, topology caching, reconciliation, cleanliness
+bookkeeping, selection, and the queue. The queue shares nothing with the rest but the state
+root and the mutex, which makes it a clean seam. Task 8 (keymaster) and Task 9 (CLI) add
+more surface, so this is the moment to split.
+
+**Files:**
+- Create: `gozer/queue.py`
+- Modify: `gozer/gatekeeper.py` (remove the queue section, compose and delegate)
+- Modify: `tests/test_queue.py` (only if an import must change — see below)
+- Create: `tests/test_queue_module.py`
+
+## Hard requirement: the public API must not change
+
+Tasks 8 and 9 are already written against `Gatekeeper`'s current method names. Every one of
+these must keep working, with identical behaviour and signatures, called on a `Gatekeeper`:
+
+`enqueue`, `queue_entries`, `queue_position`, `dequeue`, `prune_queue`,
+`open_claim_window`, `expire_and_get_claim_holder`, `may_claim`
+
+`from gozer.gatekeeper import CLAIM_WINDOW_SECONDS` must also keep working — `tests/test_queue.py`
+imports it from there. Re-export it rather than breaking the import.
+
+**The regression proof for this task is that `tests/test_queue.py` passes unchanged.** If you
+find yourself editing its assertions, stop — that means behaviour moved, which is a failure
+of this task, not a test that needs updating. Changing only an `import` line is acceptable;
+changing an assertion is not.
+
+## The extraction
+
+`gozer/queue.py` holds a `TicketQueue` class owning everything queue-shaped:
+
+- Constructor takes what it needs and nothing more: the queue directory path, a
+  `critical_section` callable (returning a context manager), and `proc_root` for liveness
+  checks. Do **not** pass it the whole `Gatekeeper` — that would recreate the coupling this
+  task exists to remove.
+- Move across: `enqueue`, `entries`, `position`, `dequeue`, `prune`, `open_claim_window`,
+  `expire_and_get_claim_holder`, `may_claim`, the `_next_seq` / `_ticket_path` /
+  `_send_to_back` / window helpers, and the constants `CLAIM_WINDOW_SECONDS` and the ticket
+  collision retry limit.
+- Keep the JSON helpers shared rather than duplicated. `_atomic_write_json` and `_read_json`
+  currently live in `gatekeeper.py`; move them to a place both modules can import (a small
+  `gozer/jsonstore.py`, or import them from `gatekeeper` if that does not create a cycle —
+  it will, since `gatekeeper` imports `queue`, so prefer the shared module). Verbatim
+  duplication of those two functions across modules is not acceptable.
+
+`Gatekeeper` then composes it in `__init__` and delegates. Delegation should be thin and
+obvious — a one-line forward per method, no logic. Keep the docstrings with the
+implementation in `queue.py`; the delegating methods can carry a one-line "see
+TicketQueue.x".
+
+Pass the mutex in as `self.critical_section`, so the queue's locking is the same lock the
+rest of the gatekeeper uses. It is reentrant now, which is what makes this safe.
+
+## Fix to land with the split
+
+**`dequeue` mutates without the mutex when called standalone.** It unlinks the ticket file
+and may close the claim window. Inside `prune` it happens to be covered, but Task 9's
+`cmd_cancel` will call it directly with no lock held, so `gozer cancel` would mutate the
+queue unlocked — the same defect class as the `_send_to_back` finding, missed because that
+finding scoped only `_send_to_back` and the expiring branch. Wrap `dequeue`'s unlink and
+window-close in `critical_section`. This is free now that the mutex is reentrant, and safe
+from both call sites.
+
+Add a test asserting `dequeue` is safe to call standalone, i.e. outside any surrounding
+critical section, and still removes the ticket and closes a window belonging to it.
+
+## New tests
+
+`tests/test_queue_module.py` exercises `TicketQueue` directly, constructed without a
+`Gatekeeper`, to prove the decoupling is real:
+
+- A `TicketQueue` built with a temp directory, a trivial no-op `critical_section` (a
+  `contextlib.nullcontext` factory is fine), and a fake `proc_root` supports the full
+  enqueue → position → dequeue cycle.
+- It requires no `Gatekeeper` import to work. If `queue.py` needs to import `gatekeeper`,
+  the extraction is wrong — assert this structurally by importing only `gozer.queue` in
+  this test module.
+
+## Steps
+
+- [ ] **Step 1:** Read `gozer/gatekeeper.py`'s queue section and `tests/test_queue.py` so you
+  know exactly what behaviour must survive.
+- [ ] **Step 2:** Write `tests/test_queue_module.py` against the not-yet-existing
+  `gozer.queue`, plus the standalone-`dequeue` test. Run them; confirm they fail for the
+  right reason (no module / unlocked mutation).
+- [ ] **Step 3:** Create `gozer/queue.py` with `TicketQueue`, move the shared JSON helpers to
+  a module both can import, and land the `dequeue` locking fix.
+- [ ] **Step 4:** Remove the queue section from `gatekeeper.py`, compose `TicketQueue`, add the
+  thin delegating methods, and re-export `CLAIM_WINDOW_SECONDS`.
+- [ ] **Step 5:** Run `python3 -m pytest tests/test_queue.py -v` — it must pass **unchanged**
+  apart from imports. Then `tests/test_queue_module.py`, then the full suite
+  (`python3 -m pytest -q`), which was 78/78 before this task.
+- [ ] **Step 6:** Report the line count of `gozer/gatekeeper.py` before and after, so the
+  controller can confirm the split achieved its purpose.
+- [ ] **Step 7:** Commit:
+
+```bash
+git add gozer/queue.py gozer/gatekeeper.py gozer/jsonstore.py tests/
+git commit -m "refactor: extract the ticket queue into its own module
+
+gatekeeper.py had reached 619 lines across nine concerns. The queue shares
+nothing with the rest but the state root and the reentrant mutex, so it splits
+cleanly. Gatekeeper composes a TicketQueue and delegates; the public method
+names are unchanged, so test_queue.py passes without touching an assertion.
+
+Also wraps dequeue's mutation in the mutex. It was covered incidentally inside
+prune, but cmd_cancel will call it directly with no lock held — the same defect
+class as the _send_to_back finding, missed because that finding scoped only
+_send_to_back and the expiring branch."
+```
+
+---
+
 ### Task 7: Reset
 
 **Files:**
