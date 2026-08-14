@@ -1,7 +1,10 @@
 import json
 import os
 import multiprocessing
+import stat
+import time
 import pytest
+import gozer.gatekeeper as gatekeeper
 from gozer.gatekeeper import Gatekeeper, utcnow
 
 
@@ -83,3 +86,78 @@ def test_critical_section_is_reentrant_across_calls(gk):
         pass
     with gk.critical_section():
         pass  # must not deadlock on a leftover mutex dir
+
+
+def test_state_dir_modes_support_multi_user_sharing(gk):
+    """gate/leases/queue must be sticky-shared like the root; mutex/ must NOT
+    be sticky, since a non-sticky parent is what lets any user clear another
+    user's crashed mutex (see critical_section's docstring)."""
+    def perm_bits(path):
+        return stat.S_IMODE(os.stat(path).st_mode)
+
+    assert perm_bits(gk.root) == 0o1777
+    for sub in ("gate", "leases", "queue"):
+        assert perm_bits(os.path.join(gk.root, sub)) == 0o1777
+
+    mutex_dir = os.path.join(gk.root, "mutex")
+    mutex_mode = os.stat(mutex_dir).st_mode
+    assert perm_bits(mutex_dir) == 0o777
+    assert not (mutex_mode & stat.S_ISVTX)
+
+
+def test_critical_section_self_heals_stale_mutex_same_user(gk):
+    """Same-UID stale-mutex recovery: backdate the mutex dir's mtime past the
+    staleness threshold and confirm critical_section reclaims it rather than
+    timing out. Cross-user recovery (the actual point of the non-sticky
+    mutex/ directory) cannot be exercised here — a single-UID sandbox has no
+    second user to be denied permission as — so it is not tested; see the
+    task report for that limitation."""
+    mutex_path = os.path.join(gk.root, "mutex", ".gatekeeper.lock")
+    os.mkdir(mutex_path)
+    stale = time.time() - (gatekeeper.MUTEX_STALE_SECONDS + 1)
+    os.utime(mutex_path, (stale, stale))
+
+    with gk.critical_section(timeout=2.0):
+        pass  # must reclaim the stale dir rather than raising TimeoutError
+
+    assert not os.path.isdir(mutex_path)  # released cleanly afterward
+
+
+def test_held_units_returns_claimed_units_keyed_by_unit(gk):
+    assert gk.held_units() == {}
+    gk.claim_unit("BOARD-A", {"lease_id": "aaa"})
+    gk.claim_unit("BOARD-B", {"lease_id": "bbb"})
+    assert gk.held_units() == {
+        "BOARD-A": {"lease_id": "aaa"},
+        "BOARD-B": {"lease_id": "bbb"},
+    }
+
+
+def test_held_units_empty_when_nothing_held(gk):
+    assert gk.held_units() == {}
+
+
+def test_delete_lease_removes_record(gk):
+    gk.write_lease({"lease_id": "aaa"})
+    gk.delete_lease("aaa")
+    assert gk.read_lease("aaa") is None
+
+
+def test_delete_lease_missing_is_a_noop(gk):
+    gk.delete_lease("never-existed")  # must not raise
+    assert gk.read_lease("never-existed") is None
+
+
+def test_update_unit_lease_returns_false_when_released_mid_write(gk, monkeypatch):
+    """update_unit_lease's isdir-check-then-write is not atomic together: if
+    release_unit() lands in that window, the write must fail closed (return
+    False) rather than raising, per its documented contract."""
+    gk.claim_unit("BOARD-A", {"lease_id": "aaa"})
+    real_write = gatekeeper._atomic_write_json
+
+    def racing_write(path, payload):
+        gk.release_unit("BOARD-A")  # simulate the race landing here
+        real_write(path, payload)
+
+    monkeypatch.setattr(gatekeeper, "_atomic_write_json", racing_write)
+    assert gk.update_unit_lease("BOARD-A", {"lease_id": "aaa2"}) is False
