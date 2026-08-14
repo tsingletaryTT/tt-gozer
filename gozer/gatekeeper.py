@@ -104,6 +104,10 @@ class Gatekeeper:
         self.root = root or os.environ.get("GOZER_ROOT") or DEFAULT_ROOT
         self.sysfs_root = sysfs_root
         self.proc_root = proc_root
+        # Reentrancy depth for critical_section(): >0 means this process
+        # already holds the mutex, so a nested call must not try to take
+        # the filesystem lock again. See critical_section's docstring.
+        self._critical_section_depth = 0
         self._ensure_dirs()
 
     # ---- layout -----------------------------------------------------------
@@ -247,7 +251,31 @@ class Gatekeeper:
         the alternative if we kept it sticky-protected - would instead block
         every user on the machine indefinitely. Trading "occasionally a lost
         race" for "never permanently wedged" is the right way round.
+
+        Reentrant within a single process/instance: a nested call (e.g.
+        Keymaster.acquire, Task 8, calling may_claim while already holding
+        the section) increments a depth counter and returns without touching
+        the filesystem lock at all. Only the outermost entry creates and
+        removes the `mkdir` lock. Without this, a nested acquire would sit
+        in the wait loop below until MUTEX_STALE_SECONDS/the timeout elapsed
+        and then either self-heal by deleting its own live lock (corrupting
+        the invariant that a held lock means "in use") or raise TimeoutError
+        - both far worse than the bug reentrancy fixes. Cross-process
+        exclusion is unaffected: two different processes still serialise on
+        the same `mkdir` exactly as before; only same-instance, same-process
+        nesting is now safe.
         """
+        if self._critical_section_depth > 0:
+            self._critical_section_depth += 1
+            try:
+                yield
+            finally:
+                # Restored even if the nested block raises, so an exception
+                # can never leave the counter stuck above zero and silently
+                # disable real locking for the rest of the process.
+                self._critical_section_depth -= 1
+            return
+
         path = os.path.join(self.root, MUTEX_SUBDIR, MUTEX_DIR)
         deadline = time.monotonic() + timeout
         # Set when a stale mutex is found but we lack permission to remove it
@@ -292,9 +320,11 @@ class Gatekeeper:
                     raise TimeoutError("gatekeeper mutex is stuck; "
                                        f"remove {path} if no gozer is running")
                 time.sleep(0.02)
+        self._critical_section_depth = 1
         try:
             yield
         finally:
+            self._critical_section_depth = 0
             with contextlib.suppress(OSError):
                 os.rmdir(path)
 
@@ -512,11 +542,28 @@ class Gatekeeper:
                 seqs.append(int(head))
         return (max(seqs) + 1) if seqs else 1
 
+    # Bound on retries when a freshly generated ticket collides with one
+    # already in the queue. secrets.token_hex(2) draws from only 65,536
+    # values, so a collision is unlikely but not negligible over a machine's
+    # lifetime; _ticket_path matches on the first filename it finds, so an
+    # undetected collision would silently operate on the wrong ticket.
+    _TICKET_COLLISION_RETRIES = 20
+
     def enqueue(self, request: dict) -> dict:
         """Append a ticket. Sequence numbers are zero-padded so 10 sorts after 9."""
         with self.critical_section():
             seq = self._next_seq()
-            ticket = secrets.token_hex(2)
+            existing = {r.get("ticket") for r in self.queue_entries()}
+            ticket = None
+            for _ in range(self._TICKET_COLLISION_RETRIES):
+                candidate = secrets.token_hex(2)
+                if candidate not in existing:
+                    ticket = candidate
+                    break
+            if ticket is None:
+                raise RuntimeError(
+                    "gozer: could not generate a unique queue ticket after "
+                    f"{self._TICKET_COLLISION_RETRIES} attempts")
             record = dict(request)
             record.update({"ticket": ticket, "seq": seq, "since": utcnow()})
             path = os.path.join(self._queue_dir(), f"{seq:06d}-{ticket}.json")
@@ -524,6 +571,15 @@ class Gatekeeper:
             return record
 
     def queue_entries(self) -> list[dict]:
+        """FIFO order.
+
+        A ticket can transiently have two files on disk (see _send_to_back,
+        which writes the new record before removing the old one so a live
+        ticket is never briefly absent). Dedupe by ticket, keeping the entry
+        with the highest `seq` -- that is always the current, correct
+        position; a lower-`seq` duplicate for the same ticket is leftover
+        litter from an interrupted move, never the "true" one.
+        """
         out = []
         for entry in sorted(os.listdir(self._queue_dir())):
             if not entry.endswith(".json"):
@@ -531,7 +587,19 @@ class Gatekeeper:
             rec = _read_json(os.path.join(self._queue_dir(), entry))
             if rec:
                 out.append(rec)
-        return sorted(out, key=lambda r: r.get("seq", 0))
+        best: dict[str, dict] = {}
+        for rec in out:
+            ticket = rec.get("ticket")
+            if ticket is None:
+                continue
+            current = best.get(ticket)
+            if current is None or rec.get("seq", 0) > current.get("seq", 0):
+                best[ticket] = rec
+        # This integer sort on the `seq` field IS the FIFO invariant. The
+        # zero-padded filename (e.g. "000012-abcd.json") is cosmetic - it
+        # only keeps `ls` output human-sorted - and is not what keeps the
+        # queue ordered; do not remove this sort believing padding suffices.
+        return sorted(best.values(), key=lambda r: r.get("seq", 0))
 
     def _ticket_path(self, ticket: str) -> str | None:
         for entry in os.listdir(self._queue_dir()):
@@ -554,27 +622,64 @@ class Gatekeeper:
             self._close_claim_window()
 
     def prune_queue(self) -> list[str]:
-        """Drop tickets whose creating process has exited."""
-        dropped = []
-        for rec in self.queue_entries():
-            pid = rec.get("pid")
-            if pid is not None and not procfd.pid_alive(pid, self.proc_root):
-                dropped.append(rec["ticket"])
-                self.dequeue(rec["ticket"])
-        return dropped
+        """Drop tickets whose creating process has exited.
+
+        Also sweeps up litter: _send_to_back writes a ticket's new record
+        before removing its old one, so a crash mid-move can transiently
+        leave two files for one ticket. queue_entries() already tolerates
+        that (it dedupes, keeping the higher `seq`), but nothing else ever
+        removes the stale lower-`seq` file from disk -- so do that here,
+        rather than leaving it to accumulate forever.
+        """
+        with self.critical_section():
+            by_ticket: dict[str, list[tuple[str, dict]]] = {}
+            for entry in sorted(os.listdir(self._queue_dir())):
+                if not entry.endswith(".json"):
+                    continue
+                path = os.path.join(self._queue_dir(), entry)
+                rec = _read_json(path)
+                if rec and rec.get("ticket"):
+                    by_ticket.setdefault(rec["ticket"], []).append((path, rec))
+            for entries in by_ticket.values():
+                if len(entries) <= 1:
+                    continue
+                entries.sort(key=lambda pe: pe[1].get("seq", 0))
+                for stale_path, _ in entries[:-1]:
+                    with contextlib.suppress(OSError):
+                        os.unlink(stale_path)
+
+            dropped = []
+            for rec in self.queue_entries():
+                pid = rec.get("pid")
+                if pid is not None and not procfd.pid_alive(pid, self.proc_root):
+                    dropped.append(rec["ticket"])
+                    self.dequeue(rec["ticket"])
+            return dropped
 
     def _send_to_back(self, ticket: str) -> None:
-        path = self._ticket_path(ticket)
-        rec = _read_json(path) if path else None
-        if not rec:
-            return
-        with contextlib.suppress(OSError):
-            os.unlink(path)
-        seq = self._next_seq()
-        rec["seq"] = seq
-        rec["requeued_at"] = utcnow()
-        _atomic_write_json(
-            os.path.join(self._queue_dir(), f"{seq:06d}-{ticket}.json"), rec)
+        """Move a ticket to the back of the queue with a fresh sequence number.
+
+        Writes the new record *before* removing the old one, and does both
+        under critical_section. Writing first means the ticket can briefly
+        exist twice on disk, but never zero times -- a crash or failed write
+        between the two steps leaves a recoverable duplicate (queue_entries
+        and prune_queue both know how to resolve it) rather than silently
+        losing a live client's place in line, which is the one failure this
+        whole mechanism exists to prevent.
+        """
+        with self.critical_section():
+            path = self._ticket_path(ticket)
+            rec = _read_json(path) if path else None
+            if not rec:
+                return
+            seq = self._next_seq()
+            rec = dict(rec)
+            rec["seq"] = seq
+            rec["requeued_at"] = utcnow()
+            _atomic_write_json(
+                os.path.join(self._queue_dir(), f"{seq:06d}-{ticket}.json"), rec)
+            with contextlib.suppress(OSError):
+                os.unlink(path)
 
     # ---- claim window -----------------------------------------------------
 
@@ -597,23 +702,39 @@ class Gatekeeper:
         with open(self._window_path(), "w") as f:
             f.write(ticket + "\n")
 
-    def claim_window_holder(self) -> str | None:
-        """The entitled ticket, or None. An expired window sends its ticket
-        to the back of the queue so a dead waiter cannot block everyone."""
+    def expire_and_get_claim_holder(self) -> str | None:
+        """The entitled ticket, or None.
+
+        Named for the side effect, not just the read: an expired window is
+        closed AND has its ticket sent to the back of the queue (never just
+        closed alone -- that would let the same dead ticket re-win the very
+        next check). Both mutations happen under critical_section so two
+        concurrent callers (every waiter polls this via may_claim) cannot
+        each observe the same expired window and each requeue the ticket
+        under a different sequence number, which would leave two live
+        entries for one ticket.
+        """
         ticket = self._claim_window_ticket()
         if ticket is None:
             return None
-        try:
-            age = time.time() - os.stat(self._window_path()).st_mtime
-        except OSError:
-            return None
-        if age > CLAIM_WINDOW_SECONDS:
-            self._close_claim_window()
-            self._send_to_back(ticket)
-            return None
-        return ticket
+        with self.critical_section():
+            # Re-check inside the lock: another caller may have already
+            # expired (and requeued, or simply closed via dequeue) this
+            # exact window while we were waiting for the mutex.
+            ticket = self._claim_window_ticket()
+            if ticket is None:
+                return None
+            try:
+                age = time.time() - os.stat(self._window_path()).st_mtime
+            except OSError:
+                return None
+            if age > CLAIM_WINDOW_SECONDS:
+                self._close_claim_window()
+                self._send_to_back(ticket)
+                return None
+            return ticket
 
     def may_claim(self, ticket: str | None) -> bool:
         """True when no window is open, or this ticket owns it."""
-        holder = self.claim_window_holder()
+        holder = self.expire_and_get_claim_holder()
         return holder is None or holder == ticket

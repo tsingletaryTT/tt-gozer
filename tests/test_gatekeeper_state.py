@@ -88,6 +88,40 @@ def test_critical_section_is_reentrant_across_calls(gk):
         pass  # must not deadlock on a leftover mutex dir
 
 
+def test_critical_section_nesting_does_not_deadlock(gk):
+    """A nested call to critical_section from *inside* an already-held one
+    (e.g. Keymaster.acquire, Task 8, calling may_claim while already holding
+    the section) must return immediately rather than trying to take its own
+    filesystem lock a second time. The inner call uses a short timeout so a
+    regression here fails fast instead of hanging the whole suite: before
+    this was made reentrant, the inner call would block for its full
+    timeout and then raise TimeoutError (or, worse, self-heal by deleting
+    the outer call's own live lock once MUTEX_STALE_SECONDS elapsed)."""
+    with gk.critical_section():
+        with gk.critical_section(timeout=0.5):
+            pass  # must complete immediately, not deadlock or time out
+
+
+def test_critical_section_recovers_after_exception_in_nested_block(gk):
+    """An exception raised inside a nested critical_section block must not
+    leave the reentrancy depth counter stuck above zero -- otherwise every
+    later call in this process would believe it's already nested and skip
+    taking the real lock, silently disabling cross-process exclusion for
+    good. Proven behaviourally: after the exception propagates, a fresh
+    critical_section() call must take the real mkdir lock again and release
+    it cleanly, not skip locking."""
+    mutex_path = os.path.join(gk.root, "mutex", ".gatekeeper.lock")
+
+    with pytest.raises(ValueError):
+        with gk.critical_section():
+            with gk.critical_section():
+                raise ValueError("boom")
+
+    with gk.critical_section():
+        assert os.path.isdir(mutex_path)  # real lock taken, depth was reset
+    assert not os.path.isdir(mutex_path)  # released cleanly afterward
+
+
 def test_state_dir_modes_support_multi_user_sharing(gk):
     """gate/leases/queue must be sticky-shared like the root; mutex/ must NOT
     be sticky, since a non-sticky parent is what lets any user clear another

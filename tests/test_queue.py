@@ -1,6 +1,8 @@
+import json
 import os
 import time
 import pytest
+import gozer.gatekeeper as gatekeeper
 from gozer.gatekeeper import Gatekeeper, CLAIM_WINDOW_SECONDS
 from conftest import QUIETBOX
 
@@ -33,7 +35,10 @@ def test_enqueue_returns_ticket_and_preserves_fifo(tmp_path, sysfs):
 
 
 def test_fifo_survives_more_than_ten_entries(tmp_path, sysfs):
-    # Zero-padded sequence numbers, so 10 must not sort before 9.
+    # FIFO order comes from the integer `seq` field (queue_entries sorts on
+    # it numerically), not from filename order -- 9 would sort before 10
+    # either way. The zero-padded filename is cosmetic: it only keeps `ls`
+    # output human-sorted for anyone inspecting queue/ by hand.
     gk = make(tmp_path, sysfs)
     tickets = [gk.enqueue(req(f"claude:{i}")) for i in range(12)]
     assert [e["who"] for e in gk.queue_entries()] == [f"claude:{i}" for i in range(12)]
@@ -87,5 +92,82 @@ def test_expired_window_moves_ticket_to_back(tmp_path, sysfs):
     marker = os.path.join(gk.root, "queue", ".claim-window")
     old = time.time() - CLAIM_WINDOW_SECONDS - 5
     os.utime(marker, (old, old))
-    assert gk.claim_window_holder() is None
+    assert gk.expire_and_get_claim_holder() is None
     assert [e["who"] for e in gk.queue_entries()] == ["claude:b", "claude:a"]
+
+
+def test_queue_entries_dedupes_a_ticket_left_with_two_files(tmp_path, sysfs):
+    """_send_to_back writes the new record before deleting the old one, so a
+    crash between those two steps can leave two files for one ticket. Prove
+    queue_entries() resolves that to a single entry at the *higher* sequence
+    (its current, correct position) rather than double-counting it or
+    reverting the requeue by picking the lower one."""
+    gk = make(tmp_path, sysfs)
+    a = gk.enqueue(req("claude:a"))
+    gk.enqueue(req("claude:b"))
+
+    # Simulate a crash mid-move: hand-write a second, higher-seq copy of
+    # ticket a's record without removing the original lower-seq file.
+    old_path = gk._ticket_path(a["ticket"])
+    with open(old_path) as f:
+        rec = json.load(f)
+    rec["seq"] = 99
+    new_path = os.path.join(gk.root, "queue", f"000099-{a['ticket']}.json")
+    with open(new_path, "w") as f:
+        json.dump(rec, f)
+
+    entries = gk.queue_entries()
+    tickets = [e["ticket"] for e in entries]
+    assert tickets.count(a["ticket"]) == 1
+    assert [e["seq"] for e in entries if e["ticket"] == a["ticket"]] == [99]
+    # The duplicate ticket now sorts last (highest seq), behind claude:b.
+    assert [e["who"] for e in entries] == ["claude:b", "claude:a"]
+
+
+def test_prune_queue_removes_stale_duplicate_ticket_file(tmp_path, sysfs):
+    """prune_queue must also sweep up the lower-seq litter file left behind
+    by a crash mid-_send_to_back, not just drop dead-pid tickets."""
+    gk = make(tmp_path, sysfs)
+    a = gk.enqueue(req("claude:a"))
+
+    old_path = gk._ticket_path(a["ticket"])
+    with open(old_path) as f:
+        rec = json.load(f)
+    rec["seq"] = 99
+    new_path = os.path.join(gk.root, "queue", f"000099-{a['ticket']}.json")
+    with open(new_path, "w") as f:
+        json.dump(rec, f)
+
+    gk.prune_queue()
+
+    remaining = [e for e in os.listdir(os.path.join(gk.root, "queue"))
+                 if e.endswith(".json")]
+    assert remaining == [f"000099-{a['ticket']}.json"]
+    assert not os.path.exists(old_path)
+
+
+def test_enqueue_retries_on_ticket_id_collision(tmp_path, sysfs, monkeypatch):
+    """secrets.token_hex(2) has only 65,536 possible values. If a collision
+    is not detected, _ticket_path's first-match lookup would silently
+    operate on the wrong ticket. Force a collision and confirm enqueue
+    retries until it finds a value not already in the queue."""
+    gk = make(tmp_path, sysfs)
+    tokens = iter(["ab12", "ab12", "cd34"])
+    monkeypatch.setattr(gatekeeper.secrets, "token_hex", lambda n: next(tokens))
+
+    a = gk.enqueue(req("claude:a"))
+    assert a["ticket"] == "ab12"
+
+    b = gk.enqueue(req("claude:b"))
+    assert b["ticket"] == "cd34"  # retried past the collision with "ab12"
+
+
+def test_enqueue_raises_when_no_unique_ticket_can_be_found(tmp_path, sysfs, monkeypatch):
+    """If every attempt collides, fail loudly rather than silently reusing
+    or corrupting another ticket's record."""
+    gk = make(tmp_path, sysfs)
+    monkeypatch.setattr(gatekeeper.secrets, "token_hex", lambda n: "dead")
+    gk.enqueue(req("claude:a"))  # ticket "dead" is now taken
+
+    with pytest.raises(RuntimeError):
+        gk.enqueue(req("claude:b"))
