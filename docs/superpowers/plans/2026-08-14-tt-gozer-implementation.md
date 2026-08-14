@@ -107,14 +107,18 @@ def build_sysfs(root, chips):
     return os.path.join(root, "class", "tenstorrent")
 
 
+# NOTE: the two board serials are deliberately ordered *opposite* to the device
+# indices they hold, so that order-dependent tests can distinguish "sorted by
+# device index" from "sorted by serial." Renumbering them into agreement would
+# make several tests pass vacuously. See tests/conftest.py for the full note.
 QUIETBOX = [
-    {"dev_index": 0, "bdf": "0000:01:00.0", "serial": "0000000000000001",
+    {"dev_index": 0, "bdf": "0000:01:00.0", "serial": "0000000000000002",
      "asic_id": "1111111111111111", "card": "p300c"},
-    {"dev_index": 1, "bdf": "0000:02:00.0", "serial": "0000000000000001",
+    {"dev_index": 1, "bdf": "0000:02:00.0", "serial": "0000000000000002",
      "asic_id": "2222222222222222", "card": "p300c"},
-    {"dev_index": 2, "bdf": "0000:03:00.0", "serial": "0000000000000002",
+    {"dev_index": 2, "bdf": "0000:03:00.0", "serial": "0000000000000001",
      "asic_id": "3333333333333333", "card": "p300c"},
-    {"dev_index": 3, "bdf": "0000:04:00.0", "serial": "0000000000000002",
+    {"dev_index": 3, "bdf": "0000:04:00.0", "serial": "0000000000000001",
      "asic_id": "4444444444444444", "card": "p300c"},
 ]
 
@@ -928,7 +932,7 @@ def test_busy_untracked_when_fd_but_no_lease(tmp_path, sysfs):
 def test_held_when_lease_pid_holds_the_fd(tmp_path, sysfs):
     gk = make(tmp_path, sysfs, pids={4242: [0, 1]})
     lease = lease_for(gk, ["0000:01:00.0", "0000:02:00.0"], pid=4242)
-    gk.claim_unit("0000000000000001", lease)
+    gk.claim_unit("0000000000000002", lease)
     gk.write_lease(lease)
     s = states(gk)
     assert s[0] == "HELD" and s[1] == "HELD"
@@ -939,7 +943,7 @@ def test_held_foreign_when_another_pid_holds_it(tmp_path, sysfs):
     # Lease says pid 4242, but pid 9999 is the one with the device open.
     gk = make(tmp_path, sysfs, pids={4242: [], 9999: [0, 1]})
     lease = lease_for(gk, ["0000:01:00.0", "0000:02:00.0"], pid=4242)
-    gk.claim_unit("0000000000000001", lease)
+    gk.claim_unit("0000000000000002", lease)
     gk.write_lease(lease)
     s = states(gk)
     assert s[0] == "HELD-FOREIGN" and s[1] == "HELD-FOREIGN"
@@ -949,7 +953,7 @@ def test_claimed_when_pid_alive_but_no_fd_yet(tmp_path, sysfs):
     # Setup phase: leased, process running, device not opened yet.
     gk = make(tmp_path, sysfs, pids={4242: []})
     lease = lease_for(gk, ["0000:01:00.0", "0000:02:00.0"], pid=4242)
-    gk.claim_unit("0000000000000001", lease)
+    gk.claim_unit("0000000000000002", lease)
     gk.write_lease(lease)
     s = states(gk)
     assert s[0] == "CLAIMED" and s[1] == "CLAIMED"
@@ -958,34 +962,34 @@ def test_claimed_when_pid_alive_but_no_fd_yet(tmp_path, sysfs):
 def test_stale_is_reaped_when_pid_dead_and_no_fd(tmp_path, sysfs):
     gk = make(tmp_path, sysfs)  # pid 4242 does not exist in the fake proc
     lease = lease_for(gk, ["0000:01:00.0", "0000:02:00.0"], pid=4242)
-    gk.claim_unit("0000000000000001", lease)
+    gk.claim_unit("0000000000000002", lease)
     gk.write_lease(lease)
     result = {s.chip.dev_index: s.state for s in gk.reconcile(reap=True)}
     assert result[0] == "FREE" and result[1] == "FREE"
-    assert gk.unit_lease("0000000000000001") is None
+    assert gk.unit_lease("0000000000000002") is None
     assert gk.read_lease("aaa") is None
 
 
 def test_stale_is_reported_but_not_reaped_when_reap_false(tmp_path, sysfs):
     gk = make(tmp_path, sysfs)
     lease = lease_for(gk, ["0000:01:00.0", "0000:02:00.0"], pid=4242)
-    gk.claim_unit("0000000000000001", lease)
+    gk.claim_unit("0000000000000002", lease)
     gk.write_lease(lease)
     result = {s.chip.dev_index: s.state for s in gk.reconcile(reap=False)}
     assert result[0] == "STALE"
-    assert gk.unit_lease("0000000000000001") is not None
+    assert gk.unit_lease("0000000000000002") is not None
 
 
 def test_live_pid_past_expect_done_is_overstayed_not_reaped(tmp_path, sysfs):
     gk = make(tmp_path, sysfs, pids={4242: [0, 1]})
     lease = lease_for(gk, ["0000:01:00.0", "0000:02:00.0"], pid=4242,
                       expect_done="2000-01-01T00:00:00Z")
-    gk.claim_unit("0000000000000001", lease)
+    gk.claim_unit("0000000000000002", lease)
     gk.write_lease(lease)
     by_idx = {s.chip.dev_index: s for s in gk.reconcile()}
     assert by_idx[0].state == "HELD"
     assert by_idx[0].overstayed is True
-    assert gk.unit_lease("0000000000000001") is not None
+    assert gk.unit_lease("0000000000000002") is not None
 
 
 def test_grain_and_unit_key(tmp_path, sysfs):
@@ -1224,18 +1228,18 @@ def test_elastic_takes_what_is_available_above_the_minimum(tmp_path, sysfs):
 
 def test_prefers_the_lower_indexed_board_for_determinism(tmp_path, sysfs):
     gk = make(tmp_path, sysfs)
-    assert gk.allocate(1, 1) == ["0000000000000001"]  # holds dev 0,1
+    assert gk.allocate(1, 1) == ["0000000000000002"]  # holds dev 0,1
 
 
 def test_exact_selects_a_named_chip_or_board(tmp_path, sysfs):
     gk = make(tmp_path, sysfs)
-    assert gk.allocate(1, 1, exact="0000:03:00.0") == ["0000000000000002"]
-    assert gk.allocate(1, 1, exact="2") == ["0000000000000002"]
+    assert gk.allocate(1, 1, exact="0000:03:00.0") == ["0000000000000001"]
+    assert gk.allocate(1, 1, exact="2") == ["0000000000000001"]
 
 
 def test_exact_returns_none_when_that_unit_is_taken(tmp_path, sysfs):
     gk = make(tmp_path, sysfs)
-    gk.claim_unit("0000000000000002", {"lease_id": "x", "pid": 1})
+    gk.claim_unit("0000000000000001", {"lease_id": "x", "pid": 1})
     assert gk.allocate(1, 1, exact="0000:03:00.0") is None
 
 

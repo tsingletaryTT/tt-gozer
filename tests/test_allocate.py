@@ -84,18 +84,18 @@ def test_no_board_combination_may_overshoot_the_maximum(tmp_path, sysfs):
 
 def test_prefers_the_lower_indexed_board_for_determinism(tmp_path, sysfs):
     gk = make(tmp_path, sysfs)
-    assert gk.allocate(1, 1) == ["0000000000000001"]  # holds dev 0,1
+    assert gk.allocate(1, 1) == ["0000000000000002"]  # holds dev 0,1
 
 
 def test_exact_selects_a_named_chip_or_board(tmp_path, sysfs):
     gk = make(tmp_path, sysfs)
-    assert gk.allocate(1, 1, exact="0000:03:00.0") == ["0000000000000002"]
-    assert gk.allocate(1, 1, exact="2") == ["0000000000000002"]
+    assert gk.allocate(1, 1, exact="0000:03:00.0") == ["0000000000000001"]
+    assert gk.allocate(1, 1, exact="2") == ["0000000000000001"]
 
 
 def test_exact_returns_none_when_that_unit_is_taken(tmp_path, sysfs):
     gk = make(tmp_path, sysfs)
-    gk.claim_unit("0000000000000002", {"lease_id": "x", "pid": 1})
+    gk.claim_unit("0000000000000001", {"lease_id": "x", "pid": 1})
     assert gk.allocate(1, 1, exact="0000:03:00.0") is None
 
 

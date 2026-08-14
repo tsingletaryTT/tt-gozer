@@ -117,10 +117,10 @@ Observed on this box:
 
 | dev | BDF | `tt_serial` | `tt_asic_id` | card |
 |-----|-----|-------------|--------------|------|
-| 0 | 0000:01:00.0 | 0000000000000001 | 1111111111111111 | p300c |
-| 1 | 0000:02:00.0 | 0000000000000001 | 2222222222222222 | p300c |
-| 2 | 0000:03:00.0 | 0000000000000002 | 3333333333333333 | p300c |
-| 3 | 0000:04:00.0 | 0000000000000002 | 4444444444444444 | p300c |
+| 0 | 0000:01:00.0 | 0000000000000002 | 1111111111111111 | p300c |
+| 1 | 0000:02:00.0 | 0000000000000002 | 2222222222222222 | p300c |
+| 2 | 0000:03:00.0 | 0000000000000001 | 3333333333333333 | p300c |
+| 3 | 0000:04:00.0 | 0000000000000001 | 4444444444444444 | p300c |
 
 **Requirement:** gozer must never open `/dev/tenstorrent/*`. Status has to be safe to run
 during someone else's active workload.
@@ -192,7 +192,7 @@ directory.
   "lease_id": "2f9a1c",
   "chips": ["0000:03:00.0", "0000:04:00.0"],
   "dev_indices": [2, 3],
-  "board_serial": "0000000000000002",
+  "board_serial": "0000000000000001",
   "who": "claude:ttm-optimize",
   "human": "ttuser",
   "host": "quietbox",
@@ -263,7 +263,7 @@ Human-readable by default, `--json` for scripts. Always includes the export line
 
 ```
 $ gozer acquire --chips 1 --who "claude:tt-generate" --reason "sdxl smoke"
-granted: chips 2,3  (board 0000000000000002, p300c)
+granted: chips 2,3  (board 0000000000000001, p300c)
   note: asked for 1 — UMD expands TT_VISIBLE_DEVICES to the whole 2-chip board
   export TT_VISIBLE_DEVICES=0000:03:00.0,0000:04:00.0
   lease 2f9a1c   release with: gozer release 2f9a1c

@@ -31,14 +31,26 @@ def build_sysfs(root, chips):
     return os.path.join(root, "class", "tenstorrent")
 
 
+# NOTE: the two board serials are deliberately ordered *opposite* to the device
+# indices they hold — the board with the lower-indexed chips (0,1) gets the
+# lexicographically *larger* serial, and vice versa. This disagreement is load
+# bearing: `_unit_sort_key` orders candidates by lowest device index, while a
+# board's unit key (its serial) is what `all_units()`/`free_units()` sort by
+# default iteration order comes from. If the serials instead agreed with device
+# order, a test asserting "the lower-indexed board wins" would pass even if the
+# device-index tiebreak were deleted and selection silently fell back to
+# serial order — the test would look green but prove nothing. Keep the
+# disagreement: do NOT "tidy" these back into ascending order to match dev
+# index, or several tests (see test_prefers_the_lower_indexed_board_for_determinism
+# in test_allocate.py) silently stop discriminating between the two orderings.
 QUIETBOX = [
-    {"dev_index": 0, "bdf": "0000:01:00.0", "serial": "0000000000000001",
+    {"dev_index": 0, "bdf": "0000:01:00.0", "serial": "0000000000000002",
      "asic_id": "1111111111111111", "card": "p300c"},
-    {"dev_index": 1, "bdf": "0000:02:00.0", "serial": "0000000000000001",
+    {"dev_index": 1, "bdf": "0000:02:00.0", "serial": "0000000000000002",
      "asic_id": "2222222222222222", "card": "p300c"},
-    {"dev_index": 2, "bdf": "0000:03:00.0", "serial": "0000000000000002",
+    {"dev_index": 2, "bdf": "0000:03:00.0", "serial": "0000000000000001",
      "asic_id": "3333333333333333", "card": "p300c"},
-    {"dev_index": 3, "bdf": "0000:04:00.0", "serial": "0000000000000002",
+    {"dev_index": 3, "bdf": "0000:04:00.0", "serial": "0000000000000001",
      "asic_id": "4444444444444444", "card": "p300c"},
 ]
 
