@@ -67,7 +67,8 @@ gozer release <lease-id>
 
 If you must reset outside a lease, check two things first:
 
-1. `gozer status` shows nothing `HELD`, `CLAIMED`, or `BUSY-UNTRACKED` on those chips.
+1. `gozer status` shows nothing `HELD`, `HELD-FOREIGN`, `CLAIMED`, or
+   `BUSY-UNTRACKED` on those chips.
 2. No eth-neighbour warning — the p300c mesh is hardwired between ASICs, so a
    reset may perturb a neighbour's links.
 
