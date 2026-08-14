@@ -189,9 +189,40 @@ def test_update_unit_lease_returns_false_when_released_mid_write(gk, monkeypatch
     gk.claim_unit("BOARD-A", {"lease_id": "aaa"})
     real_write = gatekeeper._atomic_write_json
 
-    def racing_write(path, payload):
+    def racing_write(path, payload, tmp=None):
         gk.release_unit("BOARD-A")  # simulate the race landing here
-        real_write(path, payload)
+        real_write(path, payload, tmp)
 
     monkeypatch.setattr(gatekeeper, "_atomic_write_json", racing_write)
     assert gk.update_unit_lease("BOARD-A", {"lease_id": "aaa2"}) is False
+
+
+def test_update_unit_lease_does_not_resurrect_a_released_lock(gk, monkeypatch):
+    """The lock directory must be *gone* after a release that raced a renew.
+
+    update_unit_lease used to stage its temp file inside the lock directory,
+    so a concurrent release_unit's rmdir failed ENOTEMPTY (suppressed) and the
+    following os.replace put lease.json back into a directory that was meant
+    to be gone -- a released lease resurrected as a permanently held one that
+    nothing would ever reap. The temp file now lives beside the lock
+    directory, not in it, so the rmdir succeeds and the replace fails closed.
+    """
+    gk.claim_unit("BOARD-A", {"lease_id": "aaa"})
+
+    def racing_write(path, payload, tmp=None):
+        # The write, split so the release lands between staging the temp file
+        # and renaming it into place -- the exact interleaving that used to
+        # defeat the concurrent rmdir.
+        tmp = tmp or f"{path}.tmp.{os.getpid()}"
+        with open(tmp, "w") as f:
+            json.dump(payload, f)
+        gk.release_unit("BOARD-A")
+        os.replace(tmp, path)
+
+    monkeypatch.setattr(gatekeeper, "_atomic_write_json", racing_write)
+    assert gk.update_unit_lease("BOARD-A", {"lease_id": "aaa2"}) is False
+
+    assert gk.unit_lease("BOARD-A") is None
+    assert not os.path.isdir(os.path.join(gk.root, "gate", "BOARD-A.lock"))
+    # And no temp-file litter left in gate/.
+    assert [e for e in os.listdir(os.path.join(gk.root, "gate"))] == []

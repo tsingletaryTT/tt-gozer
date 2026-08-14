@@ -57,6 +57,11 @@ MUTEX_STALE_SECONDS = 30
 # which stays advisory and never reaps on its own (see the design spec).
 DETACHED_GRACE_SECONDS = 900
 
+# Sentinel for release_unit's `expected_lease_id`, so that passing None
+# ("expect a lease record carrying no lease_id") stays distinguishable from
+# passing nothing ("release whatever is there, unconditionally").
+_UNCHECKED = object()
+
 
 def _elapsed_seconds(since: str, now: str) -> float:
     """Seconds between two utcnow()-formatted timestamps.
@@ -184,12 +189,41 @@ class Gatekeeper:
         _atomic_write_json(os.path.join(d, "lease.json"), lease)
         return True
 
-    def release_unit(self, unit_key: str) -> None:
+    def release_unit(self, unit_key: str,
+                     expected_lease_id: str | None | object = _UNCHECKED) -> bool:
+        """Drop one unit's gate lock. True when the lock was ours to drop.
+
+        `expected_lease_id` is the guard that stops one caller deleting
+        another's lock. Any caller that *decided* to release from an earlier
+        read -- reconcile's reap decides from a `held_units()` snapshot,
+        Keymaster.release from a lease record read seconds or minutes ago --
+        must pass the lease_id it believes is there. The lock is re-read here,
+        under whatever mutex the caller holds, and left strictly alone when
+        the observed lease_id differs (or the lock is gone entirely): that
+        means someone else has moved since the decision was taken, and what is
+        on disk now belongs to them.
+
+        This guard belongs in the primitive rather than only at the call
+        site, because every future caller inherits it: a `release_unit` that
+        deletes whatever it finds is a footgun that already fired twice --
+        once in reconcile's reap, once in Keymaster.release.
+
+        Omitting the argument keeps the old unconditional behaviour, for
+        callers that have just claimed the unit themselves in the same
+        critical section and so cannot be stale. Passing `None` explicitly
+        means "expect a lease record with no lease_id at all", which is how a
+        malformed lock gets swept up.
+        """
         d = self._gate_dir(unit_key)
+        if expected_lease_id is not _UNCHECKED:
+            current = self.unit_lease(unit_key)
+            if (current or {}).get("lease_id") != expected_lease_id:
+                return False
         with contextlib.suppress(OSError):
             os.unlink(os.path.join(d, "lease.json"))
         with contextlib.suppress(OSError):
             os.rmdir(d)
+        return True
 
     def unit_lease(self, unit_key: str) -> dict | None:
         return _read_json(os.path.join(self._gate_dir(unit_key), "lease.json"))
@@ -205,13 +239,29 @@ class Gatekeeper:
         False the caller already expects - but only for that specific race.
         Any other I/O error (disk full, permission oddity, etc.) is a real
         failure and must still surface.
+
+        The temp file is staged *outside* the lock directory, as
+        `gate/<unit>.lock.tmp.<pid>`, and that placement is load-bearing:
+        staged inside, a concurrent release_unit's rmdir fails ENOTEMPTY
+        (suppressed, so silently), and this function's os.replace then
+        recreates lease.json inside a directory that was meant to be gone --
+        resurrecting a released lease as one nothing will ever reap. Staged
+        outside, the concurrent rmdir always succeeds and the replace into a
+        now-missing directory raises ENOENT, which the handler below already
+        maps to False. `gate/` is the same filesystem as the lock directory it
+        contains, so the rename stays atomic.
         """
         d = self._gate_dir(unit_key)
         if not os.path.isdir(d):
             return False
+        tmp = f"{d}.tmp.{os.getpid()}"
         try:
-            _atomic_write_json(os.path.join(d, "lease.json"), lease)
+            _atomic_write_json(os.path.join(d, "lease.json"), lease, tmp=tmp)
         except OSError as e:
+            # A failed replace leaves the staged temp file behind, and it now
+            # lives in gate/ -- sweep it up rather than littering that dir.
+            with contextlib.suppress(OSError):
+                os.unlink(tmp)
             if e.errno == errno.ENOENT and not os.path.isdir(d):
                 return False
             raise
@@ -447,10 +497,32 @@ class Gatekeeper:
             results.append(ChipState(chip, state, lease, pids, overstayed))
 
         if reap and reapable:
-            for unit, lease in reapable:
-                self.release_unit(unit)
-                if lease.get("lease_id"):
-                    self.delete_lease(lease["lease_id"])
+            # The reap runs under the mutex, and re-checks every lock before
+            # deleting it. Both halves are load-bearing.
+            #
+            # Everything above this point is a *snapshot*: held_units() and
+            # the /proc scan were read potentially hundreds of milliseconds
+            # ago, and every decision in the loop above came from them.
+            # Keymaster.acquire claims inside critical_section, so without
+            # this section an acquire landing between another process's
+            # snapshot and its reap has its brand-new lock deleted -- the gate
+            # then reports the board free while a valid lease and export line
+            # exist, and the next agent is granted the same chips.
+            # (critical_section is reentrant, so a caller already holding it --
+            # allocate() via free_units, inside acquire -- just nests for free.)
+            #
+            # Holding the mutex is necessary but not sufficient: another
+            # process may have legitimately reaped this same stale lease and
+            # claimed the unit *before* we got the lock. So release_unit is
+            # given the lease_id our snapshot decided on and no-ops when the
+            # lock now carries a different one -- or none at all.
+            with self.critical_section():
+                for unit, lease in reapable:
+                    lease_id = lease.get("lease_id")
+                    if not self.release_unit(unit, expected_lease_id=lease_id):
+                        continue
+                    if lease_id:
+                        self.delete_lease(lease_id)
             # Re-derive so callers see FREE rather than the pre-reap STALE.
             return self.reconcile(reap=False)
 

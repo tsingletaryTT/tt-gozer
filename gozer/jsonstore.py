@@ -18,9 +18,18 @@ def utcnow() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _atomic_write_json(path: str, payload: dict) -> None:
-    """Write via temp file + rename so a reader never sees a partial record."""
-    tmp = f"{path}.tmp.{os.getpid()}"
+def _atomic_write_json(path: str, payload: dict, tmp: str | None = None) -> None:
+    """Write via temp file + rename so a reader never sees a partial record.
+
+    `tmp` overrides where the temporary file is staged. It defaults to a
+    sibling of `path`, which is what keeps the rename atomic (same
+    filesystem) -- but a caller writing *into* a directory that another
+    process may be removing needs the temp file to live outside that
+    directory, or its presence makes the concurrent `rmdir` fail with
+    ENOTEMPTY. See Gatekeeper.update_unit_lease. Whatever is passed must
+    still be on the same filesystem as `path`.
+    """
+    tmp = tmp or f"{path}.tmp.{os.getpid()}"
     with open(tmp, "w") as f:
         json.dump(payload, f, indent=2, sort_keys=True)
         f.write("\n")
