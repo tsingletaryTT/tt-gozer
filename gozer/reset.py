@@ -19,7 +19,7 @@ import os
 import re
 import subprocess
 
-BDF_RE = re.compile(r"^[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-9a-fA-F]$")
+BDF_RE = re.compile(r"^[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:(0[0-9a-fA-F]|1[0-9a-fA-F])\.[0-7]$")
 DEFAULT_RESET_CMD = "tt-smi"
 
 
