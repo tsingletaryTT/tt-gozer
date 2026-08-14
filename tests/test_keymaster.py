@@ -321,6 +321,39 @@ def test_run_forwards_sigint_to_a_running_child(tmp_path, sysfs):
     assert gk.all_leases() == []
 
 
+def test_run_releases_and_restores_handlers_on_a_signal_pending_before_popen(tmp_path, sysfs):
+    # Round-2 review finding: SIG_UNBLOCK must be the FIRST statement inside
+    # the inner try/finally, not the statement before it. If a signal is
+    # already pending at the moment of unblock, _forward fires immediately
+    # -- before Popen has ever run, so `proc` is still None -- and takes the
+    # no-live-child branch, raising KeyboardInterrupt. That raise must land
+    # inside the try whose finally restores the signal handlers and
+    # releases the lease, or both leak: the lease stays held forever, and
+    # _forward (closing over a permanently-None proc) is left installed as
+    # this process's SIGINT/SIGTERM handler for the rest of its life.
+    #
+    # The `_before_unblock` seam runs while SIGINT/SIGTERM are still
+    # blocked, so the signal it sends here is held pending by the kernel,
+    # not delivered on the spot -- this is the only reliable way to hit the
+    # otherwise sub-millisecond "pending at unblock time" race from a test.
+    km, gk = make(tmp_path, sysfs)
+    km.reset_runner = lambda argv, **kw: _Ok()
+    original_sigterm = signal.getsignal(signal.SIGTERM)
+    original_sigint = signal.getsignal(signal.SIGINT)
+
+    def make_a_signal_pending():
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    with pytest.raises(KeyboardInterrupt):
+        km.run([sys.executable, "-c", "pass"],
+               _before_unblock=make_a_signal_pending,
+               chips_spec="1", who="claude:test", pid=1)
+
+    assert gk.all_leases() == []
+    assert signal.getsignal(signal.SIGTERM) == original_sigterm
+    assert signal.getsignal(signal.SIGINT) == original_sigint
+
+
 def test_run_returns_10_when_queued(tmp_path, sysfs):
     km, gk = make(tmp_path, sysfs)
     km.acquire("all", who="claude:hog", pid=1)

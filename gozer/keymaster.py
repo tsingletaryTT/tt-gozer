@@ -191,7 +191,7 @@ class Keymaster:
                 else grant_or_lease["chips"])
         return {"TT_VISIBLE_DEVICES": ",".join(bdfs)}
 
-    def run(self, argv: list[str], **acquire_kwargs) -> int:
+    def run(self, argv: list[str], *, _before_unblock=None, **acquire_kwargs) -> int:
         """Acquire, run, always release -- including on signal.
 
         This is the form scripts and skills should prefer: the lease is bound to
@@ -215,6 +215,16 @@ class Keymaster:
         a signal during acquire() raises out of an acquire() that has not
         finished building its state, rather than being held pending until
         there is a well-defined try/finally around it.
+
+        `_before_unblock` is a private test-only seam: a zero-argument
+        callable invoked right after the handlers are installed but while
+        SIGINT/SIGTERM are still blocked, so a signal it sends to this
+        process is held pending by the kernel rather than delivered on the
+        spot. Production callers never pass this. It exists because "a
+        signal is already pending at the moment we unblock, before Popen
+        has run" is a sub-millisecond race that a test cannot otherwise hit
+        reliably -- and that race is exactly where the unblock-placement bug
+        this seam regression-tests was found twice.
         """
         sigs = (signal.SIGINT, signal.SIGTERM)
         previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, sigs)
@@ -247,12 +257,22 @@ class Keymaster:
             previous_handlers = {s: signal.getsignal(s) for s in sigs}
             for s in sigs:
                 signal.signal(s, _forward)
-            # Unblock now that the handlers exist. Anything that arrived
-            # while blocked above is delivered right here, straight into
-            # _forward -- never at a point where the finally below is
-            # unreachable.
-            signal.pthread_sigmask(signal.SIG_UNBLOCK, sigs)
+            if _before_unblock is not None:
+                _before_unblock()
             try:
+                # Unblock as the FIRST statement inside this try, not the
+                # statement before it. If a signal was pending, unblocking
+                # delivers it immediately and _forward runs right here --
+                # before proc is ever assigned, so it takes the no-live
+                # -child branch and raises. That raise must land inside
+                # this try so its finally (handler restore + release) is
+                # what catches it. Unblocking one statement earlier, outside
+                # this try, was the exact bug: the very same pending-signal
+                # delivery would raise from a place with no finally in
+                # scope, leaking the lease and leaving _forward (closing
+                # over a permanently-None proc) installed as the process's
+                # SIGINT/SIGTERM handler forever after.
+                signal.pthread_sigmask(signal.SIG_UNBLOCK, sigs)
                 try:
                     proc = subprocess.Popen(argv, env=env)
                 except OSError as e:
