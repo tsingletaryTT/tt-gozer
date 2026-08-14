@@ -108,14 +108,14 @@ def build_sysfs(root, chips):
 
 
 QUIETBOX = [
-    {"dev_index": 0, "bdf": "0000:01:00.0", "serial": "0000046131924062",
-     "asic_id": "FCF9BCF9E3C8B89E", "card": "p300c"},
-    {"dev_index": 1, "bdf": "0000:02:00.0", "serial": "0000046131924062",
-     "asic_id": "D45ACEDA4418F8CF", "card": "p300c"},
-    {"dev_index": 2, "bdf": "0000:03:00.0", "serial": "0000046131924055",
-     "asic_id": "EE59ECE8B1F58292", "card": "p300c"},
-    {"dev_index": 3, "bdf": "0000:04:00.0", "serial": "0000046131924055",
-     "asic_id": "89E991BDB13E022E", "card": "p300c"},
+    {"dev_index": 0, "bdf": "0000:01:00.0", "serial": "0000000000000001",
+     "asic_id": "1111111111111111", "card": "p300c"},
+    {"dev_index": 1, "bdf": "0000:02:00.0", "serial": "0000000000000001",
+     "asic_id": "2222222222222222", "card": "p300c"},
+    {"dev_index": 2, "bdf": "0000:03:00.0", "serial": "0000000000000002",
+     "asic_id": "3333333333333333", "card": "p300c"},
+    {"dev_index": 3, "bdf": "0000:04:00.0", "serial": "0000000000000002",
+     "asic_id": "4444444444444444", "card": "p300c"},
 ]
 
 SINGLE_CHIP_BOARDS = [
@@ -148,7 +148,7 @@ from conftest import QUIETBOX, SINGLE_CHIP_BOARDS, GALAXY_LIKE
 
 def test_reads_quietbox_as_two_boards_of_two(sysfs):
     boards = read_topology(sysfs(QUIETBOX))
-    assert [b.serial for b in boards] == ["0000046131924055", "0000046131924062"]
+    assert [b.serial for b in boards] == ["0000000000000001", "0000000000000002"]
     assert all(len(b.chips) == 2 for b in boards)
 
 
@@ -156,7 +156,7 @@ def test_maps_bdf_and_asic_id(sysfs):
     chips = all_chips(read_topology(sysfs(QUIETBOX)))
     assert [c.bdf for c in chips] == [
         "0000:01:00.0", "0000:02:00.0", "0000:03:00.0", "0000:04:00.0"]
-    assert chips[0].asic_id == "FCF9BCF9E3C8B89E"
+    assert chips[0].asic_id == "1111111111111111"
     assert chips[0].card == "p300c"
 
 
@@ -928,7 +928,7 @@ def test_busy_untracked_when_fd_but_no_lease(tmp_path, sysfs):
 def test_held_when_lease_pid_holds_the_fd(tmp_path, sysfs):
     gk = make(tmp_path, sysfs, pids={4242: [0, 1]})
     lease = lease_for(gk, ["0000:01:00.0", "0000:02:00.0"], pid=4242)
-    gk.claim_unit("0000046131924062", lease)
+    gk.claim_unit("0000000000000001", lease)
     gk.write_lease(lease)
     s = states(gk)
     assert s[0] == "HELD" and s[1] == "HELD"
@@ -939,7 +939,7 @@ def test_held_foreign_when_another_pid_holds_it(tmp_path, sysfs):
     # Lease says pid 4242, but pid 9999 is the one with the device open.
     gk = make(tmp_path, sysfs, pids={4242: [], 9999: [0, 1]})
     lease = lease_for(gk, ["0000:01:00.0", "0000:02:00.0"], pid=4242)
-    gk.claim_unit("0000046131924062", lease)
+    gk.claim_unit("0000000000000001", lease)
     gk.write_lease(lease)
     s = states(gk)
     assert s[0] == "HELD-FOREIGN" and s[1] == "HELD-FOREIGN"
@@ -949,7 +949,7 @@ def test_claimed_when_pid_alive_but_no_fd_yet(tmp_path, sysfs):
     # Setup phase: leased, process running, device not opened yet.
     gk = make(tmp_path, sysfs, pids={4242: []})
     lease = lease_for(gk, ["0000:01:00.0", "0000:02:00.0"], pid=4242)
-    gk.claim_unit("0000046131924062", lease)
+    gk.claim_unit("0000000000000001", lease)
     gk.write_lease(lease)
     s = states(gk)
     assert s[0] == "CLAIMED" and s[1] == "CLAIMED"
@@ -958,34 +958,34 @@ def test_claimed_when_pid_alive_but_no_fd_yet(tmp_path, sysfs):
 def test_stale_is_reaped_when_pid_dead_and_no_fd(tmp_path, sysfs):
     gk = make(tmp_path, sysfs)  # pid 4242 does not exist in the fake proc
     lease = lease_for(gk, ["0000:01:00.0", "0000:02:00.0"], pid=4242)
-    gk.claim_unit("0000046131924062", lease)
+    gk.claim_unit("0000000000000001", lease)
     gk.write_lease(lease)
     result = {s.chip.dev_index: s.state for s in gk.reconcile(reap=True)}
     assert result[0] == "FREE" and result[1] == "FREE"
-    assert gk.unit_lease("0000046131924062") is None
+    assert gk.unit_lease("0000000000000001") is None
     assert gk.read_lease("aaa") is None
 
 
 def test_stale_is_reported_but_not_reaped_when_reap_false(tmp_path, sysfs):
     gk = make(tmp_path, sysfs)
     lease = lease_for(gk, ["0000:01:00.0", "0000:02:00.0"], pid=4242)
-    gk.claim_unit("0000046131924062", lease)
+    gk.claim_unit("0000000000000001", lease)
     gk.write_lease(lease)
     result = {s.chip.dev_index: s.state for s in gk.reconcile(reap=False)}
     assert result[0] == "STALE"
-    assert gk.unit_lease("0000046131924062") is not None
+    assert gk.unit_lease("0000000000000001") is not None
 
 
 def test_live_pid_past_expect_done_is_overstayed_not_reaped(tmp_path, sysfs):
     gk = make(tmp_path, sysfs, pids={4242: [0, 1]})
     lease = lease_for(gk, ["0000:01:00.0", "0000:02:00.0"], pid=4242,
                       expect_done="2000-01-01T00:00:00Z")
-    gk.claim_unit("0000046131924062", lease)
+    gk.claim_unit("0000000000000001", lease)
     gk.write_lease(lease)
     by_idx = {s.chip.dev_index: s for s in gk.reconcile()}
     assert by_idx[0].state == "HELD"
     assert by_idx[0].overstayed is True
-    assert gk.unit_lease("0000046131924062") is not None
+    assert gk.unit_lease("0000000000000001") is not None
 
 
 def test_grain_and_unit_key(tmp_path, sysfs):
@@ -1210,40 +1210,40 @@ def test_allocates_all_boards_for_all(tmp_path, sysfs):
 
 def test_returns_none_when_minimum_cannot_be_met(tmp_path, sysfs):
     gk = make(tmp_path, sysfs)
-    gk.claim_unit("0000046131924055", {"lease_id": "x", "pid": 1})
-    gk.claim_unit("0000046131924062", {"lease_id": "y", "pid": 1})
+    gk.claim_unit("0000000000000002", {"lease_id": "x", "pid": 1})
+    gk.claim_unit("0000000000000001", {"lease_id": "y", "pid": 1})
     assert gk.allocate(1, 1) is None
 
 
 def test_elastic_takes_what_is_available_above_the_minimum(tmp_path, sysfs):
     gk = make(tmp_path, sysfs)
-    gk.claim_unit("0000046131924055", {"lease_id": "x", "pid": 1})
+    gk.claim_unit("0000000000000002", {"lease_id": "x", "pid": 1})
     units = gk.allocate(1, 4)  # only one board left
-    assert units == ["0000046131924062"]
+    assert units == ["0000000000000001"]
 
 
 def test_prefers_the_lower_indexed_board_for_determinism(tmp_path, sysfs):
     gk = make(tmp_path, sysfs)
-    assert gk.allocate(1, 1) == ["0000046131924062"]  # holds dev 0,1
+    assert gk.allocate(1, 1) == ["0000000000000001"]  # holds dev 0,1
 
 
 def test_exact_selects_a_named_chip_or_board(tmp_path, sysfs):
     gk = make(tmp_path, sysfs)
-    assert gk.allocate(1, 1, exact="0000:03:00.0") == ["0000046131924055"]
-    assert gk.allocate(1, 1, exact="2") == ["0000046131924055"]
+    assert gk.allocate(1, 1, exact="0000:03:00.0") == ["0000000000000002"]
+    assert gk.allocate(1, 1, exact="2") == ["0000000000000002"]
 
 
 def test_exact_returns_none_when_that_unit_is_taken(tmp_path, sysfs):
     gk = make(tmp_path, sysfs)
-    gk.claim_unit("0000046131924055", {"lease_id": "x", "pid": 1})
+    gk.claim_unit("0000000000000002", {"lease_id": "x", "pid": 1})
     assert gk.allocate(1, 1, exact="0000:03:00.0") is None
 
 
 def test_fresh_requires_a_clean_unit(tmp_path, sysfs):
     gk = make(tmp_path, sysfs)
     assert gk.allocate(1, 1, fresh=True) is None
-    gk.mark_clean("0000046131924055")
-    assert gk.allocate(1, 1, fresh=True) == ["0000046131924055"]
+    gk.mark_clean("0000000000000002")
+    assert gk.allocate(1, 1, fresh=True) == ["0000000000000002"]
 
 
 def test_chip_grain_allocates_individual_chips(tmp_path, sysfs):
@@ -1264,7 +1264,7 @@ def test_eth_neighbours_reports_other_tenants_on_shared_boards(tmp_path, sysfs):
 
 def test_no_eth_neighbours_when_whole_board_is_yours(tmp_path, sysfs):
     gk = make(tmp_path, sysfs)
-    assert gk.eth_neighbours(["0000046131924062"]) == {}
+    assert gk.eth_neighbours(["0000000000000001"]) == {}
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -2685,7 +2685,7 @@ def test_status_json_lists_every_chip_free(env, capsys):
 def test_status_human_output_names_boards_and_chips(env, capsys):
     code, out = run(["status"], capsys)
     assert code == 0
-    assert "0000046131924062" in out
+    assert "0000000000000001" in out
     assert "chip 0" in out and "FREE" in out
 
 
@@ -3251,10 +3251,11 @@ These two commands touch real hardware state but only read it. Neither acquires,
 releases, nor resets anything.
 
 Run: `cd ~/code/tt-gozer && ./bin/gozer topology && ./bin/gozer status`
-Expected: two boards listed with the real serials (`0000046131924062`,
-`0000046131924055`), grain `board`, and every chip reported `BUSY-UNTRACKED` or `HELD`
-if a workload is running, `FREE` otherwise. **Do not run `acquire` or `release`
-against the real box in this step** — a release would reset chips someone may be using.
+Expected: two boards listed with distinct serials read back from sysfs (this box
+reported `0000000000000001` and `0000000000000002`), grain `board`, and every chip
+reported `BUSY-UNTRACKED` or `HELD` if a workload is running, `FREE` otherwise.
+**Do not run `acquire` or `release` against the real box in this step** — a release
+would reset chips someone may be using.
 
 - [ ] **Step 6: Run the whole suite**
 
@@ -3626,7 +3627,7 @@ world-readable lease files; `gozer reconcile --sudo` recovers full truth.
 
 For enforceable isolation, use device-cgroups (`docker --device
 /dev/tenstorrent/N`) or Kubernetes DRA (`tt-dra-driver`). The state format here
-is plain JSON so a supervisor such as `tt-station-agentd` can read or adopt it.
+is plain JSON so a similar agent daemon could read or adopt it.
 
 ## The allocation grain is derived, not assumed
 

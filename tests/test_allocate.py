@@ -61,16 +61,16 @@ def test_allocates_all_boards_for_all(tmp_path, sysfs):
 
 def test_returns_none_when_minimum_cannot_be_met(tmp_path, sysfs):
     gk = make(tmp_path, sysfs)
-    gk.claim_unit("0000046131924055", {"lease_id": "x", "pid": 1})
-    gk.claim_unit("0000046131924062", {"lease_id": "y", "pid": 1})
+    gk.claim_unit("0000000000000002", {"lease_id": "x", "pid": 1})
+    gk.claim_unit("0000000000000001", {"lease_id": "y", "pid": 1})
     assert gk.allocate(1, 1) is None
 
 
 def test_elastic_takes_what_is_available_above_the_minimum(tmp_path, sysfs):
     gk = make(tmp_path, sysfs)
-    gk.claim_unit("0000046131924055", {"lease_id": "x", "pid": 1})
+    gk.claim_unit("0000000000000002", {"lease_id": "x", "pid": 1})
     units = gk.allocate(1, 4)  # only one board left
-    assert units == ["0000046131924062"]
+    assert units == ["0000000000000001"]
 
 
 def test_no_board_combination_may_overshoot_the_maximum(tmp_path, sysfs):
@@ -84,26 +84,26 @@ def test_no_board_combination_may_overshoot_the_maximum(tmp_path, sysfs):
 
 def test_prefers_the_lower_indexed_board_for_determinism(tmp_path, sysfs):
     gk = make(tmp_path, sysfs)
-    assert gk.allocate(1, 1) == ["0000046131924062"]  # holds dev 0,1
+    assert gk.allocate(1, 1) == ["0000000000000001"]  # holds dev 0,1
 
 
 def test_exact_selects_a_named_chip_or_board(tmp_path, sysfs):
     gk = make(tmp_path, sysfs)
-    assert gk.allocate(1, 1, exact="0000:03:00.0") == ["0000046131924055"]
-    assert gk.allocate(1, 1, exact="2") == ["0000046131924055"]
+    assert gk.allocate(1, 1, exact="0000:03:00.0") == ["0000000000000002"]
+    assert gk.allocate(1, 1, exact="2") == ["0000000000000002"]
 
 
 def test_exact_returns_none_when_that_unit_is_taken(tmp_path, sysfs):
     gk = make(tmp_path, sysfs)
-    gk.claim_unit("0000046131924055", {"lease_id": "x", "pid": 1})
+    gk.claim_unit("0000000000000002", {"lease_id": "x", "pid": 1})
     assert gk.allocate(1, 1, exact="0000:03:00.0") is None
 
 
 def test_fresh_requires_a_clean_unit(tmp_path, sysfs):
     gk = make(tmp_path, sysfs)
     assert gk.allocate(1, 1, fresh=True) is None
-    gk.mark_clean("0000046131924055")
-    assert gk.allocate(1, 1, fresh=True) == ["0000046131924055"]
+    gk.mark_clean("0000000000000002")
+    assert gk.allocate(1, 1, fresh=True) == ["0000000000000002"]
 
 
 def test_chip_grain_allocates_individual_chips(tmp_path, sysfs):
@@ -124,4 +124,4 @@ def test_eth_neighbours_reports_other_tenants_on_shared_boards(tmp_path, sysfs):
 
 def test_no_eth_neighbours_when_whole_board_is_yours(tmp_path, sysfs):
     gk = make(tmp_path, sysfs)
-    assert gk.eth_neighbours(["0000046131924062"]) == {}
+    assert gk.eth_neighbours(["0000000000000001"]) == {}

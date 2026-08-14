@@ -5,7 +5,7 @@ from conftest import QUIETBOX, SINGLE_CHIP_BOARDS, GALAXY_LIKE
 
 def test_reads_quietbox_as_two_boards_of_two(sysfs):
     boards = read_topology(sysfs(QUIETBOX))
-    assert [b.serial for b in boards] == ["0000046131924055", "0000046131924062"]
+    assert [b.serial for b in boards] == ["0000000000000001", "0000000000000002"]
     assert all(len(b.chips) == 2 for b in boards)
 
 
@@ -13,7 +13,7 @@ def test_maps_bdf_and_asic_id(sysfs):
     chips = all_chips(read_topology(sysfs(QUIETBOX)))
     assert [c.bdf for c in chips] == [
         "0000:01:00.0", "0000:02:00.0", "0000:03:00.0", "0000:04:00.0"]
-    assert chips[0].asic_id == "FCF9BCF9E3C8B89E"
+    assert chips[0].asic_id == "1111111111111111"
     assert chips[0].card == "p300c"
 
 
@@ -58,4 +58,4 @@ def test_env_var_gozer_sysfs_root(sysfs, monkeypatch):
     monkeypatch.setenv("GOZER_SYSFS_ROOT", path)
     # Call read_topology with no argument; should use env var
     boards = read_topology()
-    assert [b.serial for b in boards] == ["0000046131924055", "0000046131924062"]
+    assert [b.serial for b in boards] == ["0000000000000001", "0000000000000002"]

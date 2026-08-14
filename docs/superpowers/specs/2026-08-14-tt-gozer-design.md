@@ -1,7 +1,7 @@
 # Design: tt-gozer — cooperative Tenstorrent chip leasing for agents
 
 *Written 2026-08-14. Validated against the hardware and source on
-`tsingletaryTT-quietbox` (2× p300c = 4 Blackhole ASICs, tt-kmd 2.9.0, tt-smi 5.3.0,
+a QuietBox 2 (2× p300c = 4 Blackhole ASICs, tt-kmd 2.9.0, tt-smi 5.3.0,
 tt-umd 0.9.5). Audience: any agentic flow on a Tenstorrent box — Claude Code sessions,
 aider, plain shell scripts, cron.*
 
@@ -117,10 +117,10 @@ Observed on this box:
 
 | dev | BDF | `tt_serial` | `tt_asic_id` | card |
 |-----|-----|-------------|--------------|------|
-| 0 | 0000:01:00.0 | 0000046131924062 | FCF9BCF9E3C8B89E | p300c |
-| 1 | 0000:02:00.0 | 0000046131924062 | D45ACEDA4418F8CF | p300c |
-| 2 | 0000:03:00.0 | 0000046131924055 | EE59ECE8B1F58292 | p300c |
-| 3 | 0000:04:00.0 | 0000046131924055 | 89E991BDB13E022E | p300c |
+| 0 | 0000:01:00.0 | 0000000000000001 | 1111111111111111 | p300c |
+| 1 | 0000:02:00.0 | 0000000000000001 | 2222222222222222 | p300c |
+| 2 | 0000:03:00.0 | 0000000000000002 | 3333333333333333 | p300c |
+| 3 | 0000:04:00.0 | 0000000000000002 | 4444444444444444 | p300c |
 
 **Requirement:** gozer must never open `/dev/tenstorrent/*`. Status has to be safe to run
 during someone else's active workload.
@@ -192,10 +192,10 @@ directory.
   "lease_id": "2f9a1c",
   "chips": ["0000:03:00.0", "0000:04:00.0"],
   "dev_indices": [2, 3],
-  "board_serial": "0000046131924055",
+  "board_serial": "0000000000000002",
   "who": "claude:ttm-optimize",
   "human": "ttuser",
-  "host": "tsingletaryTT-quietbox",
+  "host": "quietbox",
   "pid": 902311,
   "pgid": 902300,
   "session": "e212aa0a",
@@ -263,7 +263,7 @@ Human-readable by default, `--json` for scripts. Always includes the export line
 
 ```
 $ gozer acquire --chips 1 --who "claude:tt-generate" --reason "sdxl smoke"
-granted: chips 2,3  (board 0000046131924055, p300c)
+granted: chips 2,3  (board 0000000000000002, p300c)
   note: asked for 1 — UMD expands TT_VISIBLE_DEVICES to the whole 2-chip board
   export TT_VISIBLE_DEVICES=0000:03:00.0,0000:04:00.0
   lease 2f9a1c   release with: gozer release 2f9a1c
@@ -438,11 +438,11 @@ State these plainly in the README rather than implying safety that is not there.
 * **State is per-machine.** `/tmp/tt-gozer` is local. The repo syncs the *tooling* between
   machines, never the lock state.
 * **Real isolation belongs elsewhere.** Device-cgroup or container enforcement
-  (`docker --device /dev/tenstorrent/N`) is the enforceable answer;
-  `tt-station/docs/design/isolated-chips-per-user.md` already sketches it against the
-  agentd lease table. The state format here is deliberately plain JSON so
-  `tt-station-agentd` can read or adopt it later, and DRA/`tt-dra-driver` remains the path
-  if the box ever joins a cluster.
+  (`docker --device /dev/tenstorrent/N`) is the enforceable answer; a related internal
+  design sketch for per-chip leasing on a single box already covers this ground against
+  an agentd-style lease table. The state format here is deliberately plain JSON so a
+  similar agent daemon could read or adopt it later, and DRA/`tt-dra-driver` remains the
+  path if the box ever joins a cluster.
 
 ## Open items
 

@@ -32,14 +32,14 @@ def build_sysfs(root, chips):
 
 
 QUIETBOX = [
-    {"dev_index": 0, "bdf": "0000:01:00.0", "serial": "0000046131924062",
-     "asic_id": "FCF9BCF9E3C8B89E", "card": "p300c"},
-    {"dev_index": 1, "bdf": "0000:02:00.0", "serial": "0000046131924062",
-     "asic_id": "D45ACEDA4418F8CF", "card": "p300c"},
-    {"dev_index": 2, "bdf": "0000:03:00.0", "serial": "0000046131924055",
-     "asic_id": "EE59ECE8B1F58292", "card": "p300c"},
-    {"dev_index": 3, "bdf": "0000:04:00.0", "serial": "0000046131924055",
-     "asic_id": "89E991BDB13E022E", "card": "p300c"},
+    {"dev_index": 0, "bdf": "0000:01:00.0", "serial": "0000000000000001",
+     "asic_id": "1111111111111111", "card": "p300c"},
+    {"dev_index": 1, "bdf": "0000:02:00.0", "serial": "0000000000000001",
+     "asic_id": "2222222222222222", "card": "p300c"},
+    {"dev_index": 2, "bdf": "0000:03:00.0", "serial": "0000000000000002",
+     "asic_id": "3333333333333333", "card": "p300c"},
+    {"dev_index": 3, "bdf": "0000:04:00.0", "serial": "0000000000000002",
+     "asic_id": "4444444444444444", "card": "p300c"},
 ]
 
 SINGLE_CHIP_BOARDS = [
