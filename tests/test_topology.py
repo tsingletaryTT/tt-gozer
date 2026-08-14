@@ -34,3 +34,28 @@ def test_grain_is_chip_when_a_board_holds_more_than_two(sysfs):
 def test_missing_tree_raises(tmp_path):
     with pytest.raises(TopologyError):
         read_topology(str(tmp_path / "nope"))
+
+
+def test_unreadable_tree_raises(tmp_path):
+    import os
+    root = str(tmp_path / "unreadable")
+    os.makedirs(root)
+    # If running as root, chmod 000 does not actually deny access.
+    # Skip the test in that case with a clear reason.
+    if os.access(root, os.R_OK):
+        os.chmod(root, 0o000)
+        if os.access(root, os.R_OK):
+            pytest.skip("running as root; chmod 000 does not deny access")
+    try:
+        with pytest.raises(TopologyError):
+            read_topology(root)
+    finally:
+        os.chmod(root, 0o755)
+
+
+def test_env_var_gozer_sysfs_root(sysfs, monkeypatch):
+    path = sysfs(QUIETBOX)
+    monkeypatch.setenv("GOZER_SYSFS_ROOT", path)
+    # Call read_topology with no argument; should use env var
+    boards = read_topology()
+    assert [b.serial for b in boards] == ["0000046131924055", "0000046131924062"]

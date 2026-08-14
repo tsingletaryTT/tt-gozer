@@ -65,7 +65,11 @@ def read_topology(sysfs_root: str | None = None) -> list[Board]:
         raise TopologyError(f"no Tenstorrent sysfs tree at {root}")
 
     chips: list[Chip] = []
-    for entry in sorted(os.listdir(root)):
+    try:
+        entries = sorted(os.listdir(root))
+    except OSError as e:
+        raise TopologyError(f"cannot read Tenstorrent sysfs tree at {root}: {e}") from e
+    for entry in entries:
         if not entry.startswith("tenstorrent!"):
             continue
         try:
