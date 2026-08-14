@@ -2344,14 +2344,189 @@ to the child, so an interrupted agent cannot leak a lease."
 
 **Files:**
 - Create: `gozer/cli.py`
-- Test: `tests/test_cli.py`
+- Modify: `gozer/procfd.py` (add `sudo_available`, `use_sudo` support — see Step 0)
+- Modify: `gozer/gatekeeper.py` (add the `use_sudo` attribute — see Step 0)
+- Test: `tests/test_cli.py`, `tests/test_procfd.py` (append the sudo tests from Step 0)
 
 **Interfaces:**
 - Consumes: everything above.
-- Produces: `main(argv: list[str]) -> int`.
+- Produces:
+  - `main(argv: list[str]) -> int`
+  - `procfd.sudo_available() -> bool`
+  - `procfd.holders(proc_root=..., use_sudo=False)` — the extended signature
+  - `Gatekeeper.use_sudo: bool` (defaults `False`)
 
 Subcommands: `status`, `topology`, `acquire` (alias `summon`), `wait`, `queue`, `cancel`,
 `renew`, `release` (alias `banish`), `reconcile`, `adopt`, `env`, `run`.
+
+- [ ] **Step 0: Make `--sudo` real**
+
+*Added by controller ruling during execution.* The design spec promises `gozer reconcile
+--sudo` recovers cross-user fd truth, and `procfd`'s docstring points at it. Without this
+step `--sudo` would be accepted by argparse and silently ignored — a flag that lies is
+worse than no flag.
+
+The scan must use `sudo -n` (non-interactive) **only**. An agent running `gozer` must never
+be left hanging on an invisible password prompt.
+
+Append to `gozer/procfd.py`:
+
+```python
+import shlex
+import subprocess
+
+SUDO_SCAN_TIMEOUT = 10
+
+
+def sudo_available() -> bool:
+    """True when passwordless sudo works right now.
+
+    `sudo -n true` never prompts: it fails immediately if credentials would be
+    required. That matters because gozer runs under agents with no terminal to
+    type a password into.
+    """
+    try:
+        proc = subprocess.run(["sudo", "-n", "true"], capture_output=True,
+                              timeout=SUDO_SCAN_TIMEOUT)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return proc.returncode == 0
+
+
+def _sudo_holders(proc_root: str, runner=subprocess.run) -> dict[int, list[int]]:
+    """Re-run this module's own scan under sudo to see other users' processes.
+
+    /proc/<pid>/fd is readable only by its owner, so an unprivileged scan sees
+    only our own processes. Rather than shelling out to lsof (not always
+    installed) we re-execute this file with the same interpreter under sudo and
+    read back its JSON.
+    """
+    argv = ["sudo", "-n", sys.executable, os.path.abspath(__file__),
+            "--scan", proc_root]
+    try:
+        proc = runner(argv, capture_output=True, text=True,
+                      timeout=SUDO_SCAN_TIMEOUT)
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    if proc.returncode != 0 or not proc.stdout.strip():
+        return {}
+    try:
+        raw = json.loads(proc.stdout)
+    except ValueError:
+        return {}
+    return {int(k): sorted(v) for k, v in raw.items()}
+```
+
+Change the `holders` signature and add the elevated path. The unprivileged scan always
+runs, so a failed or unavailable sudo degrades to same-user truth rather than to nothing:
+
+```python
+def holders(proc_root: str = "/proc", use_sudo: bool = False,
+            runner=None) -> dict[int, list[int]]:
+    """Map device index -> sorted pids holding it open.
+
+    With use_sudo, merge in an elevated scan so other users' processes are
+    visible too. The unprivileged scan still runs first, so an unavailable
+    sudo degrades to same-user truth instead of to an empty result.
+    """
+    found: dict[int, set[int]] = {}
+    ...existing scan body, unchanged, filling `found`...
+
+    result = {dev: sorted(pids) for dev, pids in sorted(found.items())}
+
+    if use_sudo:
+        for dev, pids in _sudo_holders(
+                proc_root, **({"runner": runner} if runner else {})).items():
+            result[dev] = sorted(set(result.get(dev, [])) | set(pids))
+    return dict(sorted(result.items()))
+```
+
+Add the module's `--scan` self-invocation at the bottom of `gozer/procfd.py`, and the
+`json`/`sys` imports it needs at the top:
+
+```python
+if __name__ == "__main__":
+    # Invoked as `sudo python3 procfd.py --scan /proc` by _sudo_holders above.
+    # Prints the same mapping as holders(), as JSON, for the parent to merge.
+    import sys as _sys
+    if len(_sys.argv) == 3 and _sys.argv[1] == "--scan":
+        print(json.dumps({str(k): v for k, v in holders(_sys.argv[2]).items()}))
+    else:
+        _sys.exit(2)
+```
+
+In `gozer/gatekeeper.py`, add `self.use_sudo = False` to `__init__`, and change the one
+call in `reconcile` from `procfd.holders(self.proc_root)` to
+`procfd.holders(self.proc_root, use_sudo=self.use_sudo)`.
+
+Append these tests to `tests/test_procfd.py`:
+
+```python
+def test_sudo_available_is_false_when_sudo_refuses(monkeypatch):
+    import subprocess as sp
+    from gozer import procfd
+
+    class Refused:
+        returncode = 1
+
+    monkeypatch.setattr(sp, "run", lambda *a, **k: Refused())
+    assert procfd.sudo_available() is False
+
+
+def test_sudo_available_is_false_when_sudo_is_missing(monkeypatch):
+    import subprocess as sp
+    from gozer import procfd
+
+    def boom(*a, **k):
+        raise FileNotFoundError("no sudo here")
+
+    monkeypatch.setattr(sp, "run", boom)
+    assert procfd.sudo_available() is False
+
+
+def test_sudo_scan_uses_non_interactive_flag(tmp_path):
+    """An agent has no terminal; sudo must never be able to prompt."""
+    from gozer import procfd
+    seen = {}
+
+    class Ok:
+        returncode, stdout, stderr = 0, "{}", ""
+
+    def capture(argv, **kw):
+        seen["argv"] = argv
+        return Ok()
+
+    procfd.holders(str(tmp_path), use_sudo=True, runner=capture)
+    assert seen["argv"][:2] == ["sudo", "-n"]
+
+
+def test_sudo_results_merge_with_unprivileged_scan(tmp_path):
+    from gozer import procfd
+    p = fake_proc(tmp_path, {100: ("mine", [1])})
+
+    class Ok:
+        returncode = 0
+        stdout = '{"1": [200], "2": [300]}'
+        stderr = ""
+
+    merged = procfd.holders(p, use_sudo=True, runner=lambda *a, **k: Ok())
+    assert merged == {1: [100, 200], 2: [300]}
+
+
+def test_failed_sudo_degrades_to_same_user_truth(tmp_path):
+    """Losing the elevated scan must not lose the scan we could do."""
+    from gozer import procfd
+    p = fake_proc(tmp_path, {100: ("mine", [1])})
+
+    class Failed:
+        returncode, stdout, stderr = 1, "", "sudo: a password is required"
+
+    assert procfd.holders(p, use_sudo=True,
+                          runner=lambda *a, **k: Failed()) == {1: [100]}
+```
+
+Run: `cd ~/code/tt-gozer && python3 -m pytest tests/test_procfd.py -v`
+Expected: PASS — the pre-existing procfd tests plus these 5.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2507,6 +2682,36 @@ def test_unreadable_topology_exits_14(tmp_path, monkeypatch, capsys):
     assert code == 14
 
 
+def test_reconcile_sudo_flag_reaches_the_scan(env, capsys, monkeypatch):
+    """--sudo must actually change behaviour, not just be accepted."""
+    from gozer import procfd
+    seen = {}
+    real = procfd.holders
+
+    def spy(proc_root="/proc", use_sudo=False, **kw):
+        seen["use_sudo"] = use_sudo
+        return real(proc_root)
+
+    monkeypatch.setattr(procfd, "holders", spy)
+    code, _ = run(["reconcile", "--sudo"], capsys)
+    assert code == 0
+    assert seen["use_sudo"] is True
+
+
+def test_reconcile_without_sudo_does_not_elevate(env, capsys, monkeypatch):
+    from gozer import procfd
+    seen = {}
+    real = procfd.holders
+
+    def spy(proc_root="/proc", use_sudo=False, **kw):
+        seen["use_sudo"] = use_sudo
+        return real(proc_root)
+
+    monkeypatch.setattr(procfd, "holders", spy)
+    run(["reconcile"], capsys)
+    assert seen["use_sudo"] is False
+
+
 def test_status_never_opens_a_device_node(env, capsys, monkeypatch):
     """Hard guard on the core safety promise of this tool."""
     real_open = open
@@ -2545,10 +2750,10 @@ import os
 import sys
 import time
 
-from gozer import __version__
+from gozer import __version__, procfd
 from gozer.gatekeeper import Gatekeeper
 from gozer.keymaster import Grant, Keymaster, parse_duration
-from gozer.topology import TopologyError, all_chips
+from gozer.topology import TopologyError
 
 EXIT_OK = 0
 EXIT_QUEUED = 10
@@ -2753,10 +2958,16 @@ def cmd_release(args) -> int:
 
 def cmd_reconcile(args) -> int:
     gk, _ = _make(args)
+    if args.sudo:
+        gk.use_sudo = True
     states = gk.reconcile(reap=True)
     payload = {"chips": [{"dev_index": s.chip.dev_index, "state": s.state}
-                         for s in states]}
+                         for s in states],
+               "sudo": bool(args.sudo)}
     human = "\n".join(f"chip {s.chip.dev_index}  {s.state}" for s in states)
+    if args.sudo and not procfd.sudo_available():
+        human += ("\n! --sudo requested but passwordless sudo is unavailable; "
+                  "results cover your own processes only")
     _emit(payload, human, args.json)
     return EXIT_OK
 
@@ -2915,7 +3126,7 @@ if __name__ == "__main__":
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `cd ~/code/tt-gozer && python3 -m pytest tests/test_cli.py -v`
-Expected: PASS, 18 passed
+Expected: PASS, 20 passed
 
 - [ ] **Step 5: Smoke-test against the real box, read-only**
 
