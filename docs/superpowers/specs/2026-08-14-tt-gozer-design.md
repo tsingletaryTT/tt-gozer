@@ -239,6 +239,24 @@ When more is free than requested, prefer in order: (1) boards with no other tena
 minimise eth-neighbour disturbance; (2) already-reset/clean boards; (3) lowest device
 index, for determinism in tests.
 
+### Allocation reaps as a side effect
+
+Selection asks `free_units` which units are free, and `free_units` reconciles first with
+reaping enabled. So **allocating garbage-collects leases whose owning process is gone**,
+deleting their lease records and releasing their gate locks — including other tenants'.
+
+This is deliberate and load-bearing, not an oversight. A unit counts as free only when
+every one of its chips reads `FREE`; a `STALE` unit — dead pid, no open fd, chips
+genuinely idle — would otherwise stay unallocatable until a human ran `gozer reconcile` by
+hand, so one crashed agent would block the box indefinitely. Reaping a lease whose process
+is completely gone is garbage collection, not claiming, and it is what lets the gate
+recover from a crash unattended.
+
+Two consequences follow. Allocation must run inside `critical_section`, so the reap cannot
+race a concurrent claim. And `allocate` is not a safe dry-run primitive: anything wanting a
+speculative "what would I get" answer must reconcile with `reap=False` and reason about
+`STALE` itself, rather than calling `allocate`.
+
 ### Grant output
 
 Human-readable by default, `--json` for scripts. Always includes the export line:
