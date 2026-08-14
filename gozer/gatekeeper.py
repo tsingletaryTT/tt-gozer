@@ -42,6 +42,30 @@ def utcnow() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def parse_chip_request(spec: str, total: int) -> tuple[int, int]:
+    """Parse --chips into (minimum, maximum).
+
+    "1" -> (1, 1)     exactly one
+    "all" -> (total, total)
+    "1-4" -> (1, 4)   elastic: at least 1, up to 4
+    """
+    spec = (spec or "").strip().lower()
+    if spec == "all":
+        return total, total
+    if "-" in spec:
+        lo_s, _, hi_s = spec.partition("-")
+        if not lo_s.isdigit() or not hi_s.isdigit():
+            raise ValueError(f"bad --chips range: {spec!r}")
+        lo, hi = int(lo_s), int(hi_s)
+        if lo < 1 or hi < lo:
+            raise ValueError(f"bad --chips range: {spec!r}")
+        return lo, min(hi, total)
+    if spec.isdigit() and int(spec) >= 1:
+        n = int(spec)
+        return n, n
+    raise ValueError(f"bad --chips value: {spec!r} (want N, all, or LO-HI)")
+
+
 def _atomic_write_json(path: str, payload: dict) -> None:
     """Write via temp file + rename so a reader never sees a partial record."""
     tmp = f"{path}.tmp.{os.getpid()}"
@@ -345,3 +369,101 @@ class Gatekeeper:
             return self.reconcile(reap=False)
 
         return results
+
+    # ---- cleanliness bookkeeping ------------------------------------------
+
+    def _clean_marker(self, unit_key: str) -> str:
+        return os.path.join(self.root, "gate", f"{unit_key}.clean")
+
+    def mark_clean(self, unit_key: str) -> None:
+        """Record that this unit has been reset since its last release."""
+        with open(self._clean_marker(unit_key), "w") as f:
+            f.write(utcnow() + "\n")
+
+    def clear_clean(self, unit_key: str) -> None:
+        with contextlib.suppress(OSError):
+            os.unlink(self._clean_marker(unit_key))
+
+    def is_clean(self, unit_key: str) -> bool:
+        return os.path.exists(self._clean_marker(unit_key))
+
+    # ---- selection --------------------------------------------------------
+
+    def all_units(self) -> list[str]:
+        if self.grain == "board":
+            return [b.serial for b in self.boards]
+        return [c.bdf for c in all_chips(self.boards)]
+
+    def free_units(self) -> list[str]:
+        """Units with no lease and no process holding any of their chips."""
+        by_chip = {s.chip.bdf: s for s in self.reconcile()}
+        free = []
+        for unit in self.all_units():
+            chips = self.chips_in_unit(unit)
+            if chips and all(by_chip[c.bdf].state == "FREE" for c in chips):
+                free.append(unit)
+        return free
+
+    def _unit_sort_key(self, unit: str) -> tuple:
+        """Prefer clean units, then the lowest device index, for determinism."""
+        chips = self.chips_in_unit(unit)
+        lowest = min((c.dev_index for c in chips), default=10**6)
+        return (0 if self.is_clean(unit) else 1, lowest)
+
+    def _resolve_exact(self, exact: str) -> str | None:
+        """Accept a BDF, a device index, or a unit key; return the unit key."""
+        for chip in all_chips(self.boards):
+            if exact in (chip.bdf, str(chip.dev_index)):
+                return self.unit_key_for(chip)
+        return exact if exact in self.all_units() else None
+
+    def allocate(self, min_chips: int, max_chips: int, exact: str | None = None,
+                 fresh: bool = False) -> list[str] | None:
+        """Choose unit keys satisfying the request, or None. Does not claim."""
+        free = self.free_units()
+        if fresh:
+            free = [u for u in free if self.is_clean(u)]
+
+        if exact is not None:
+            unit = self._resolve_exact(exact)
+            if unit is None or unit not in free:
+                return None
+            return [unit]
+
+        candidates = sorted(free, key=self._unit_sort_key)
+        chosen: list[str] = []
+        count = 0
+        for unit in candidates:
+            if count >= max_chips:
+                break
+            size = len(self.chips_in_unit(unit))
+            # Never overshoot the maximum, unless the very first unit already
+            # exceeds it -- that is the UMD board-expansion case, where the
+            # smallest grantable thing is a whole board and we say so upstream.
+            if count + size > max_chips and count > 0:
+                continue
+            chosen.append(unit)
+            count += size
+
+        return chosen if count >= min_chips else None
+
+    def eth_neighbours(self, units: list[str]) -> dict[str, str]:
+        """Leased chips sharing a board with the selection but not part of it.
+
+        The p300c mesh is hardwired, so a reset on release may perturb these.
+        Reported as a warning, never a block -- see the design spec.
+        """
+        selected = {c.bdf for u in units for c in self.chips_in_unit(u)}
+        held = self.held_units()
+        out: dict[str, str] = {}
+        for board in self.boards:
+            board_bdfs = {c.bdf for c in board.chips}
+            if not (board_bdfs & selected):
+                continue
+            for chip in board.chips:
+                if chip.bdf in selected:
+                    continue
+                lease = held.get(self.unit_key_for(chip))
+                if lease:
+                    out[chip.bdf] = lease.get("who", "unknown")
+        return out
