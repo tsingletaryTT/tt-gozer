@@ -26,7 +26,11 @@ import json
 import os
 import secrets
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
+
+from gozer import procfd
+from gozer.topology import Board, Chip, all_chips, lease_grain, read_topology
 
 DEFAULT_ROOT = "/tmp/tt-gozer"
 MUTEX_SUBDIR = "mutex"
@@ -53,6 +57,15 @@ def _read_json(path: str) -> dict | None:
             return json.load(f)
     except (OSError, ValueError):
         return None
+
+
+@dataclass
+class ChipState:
+    chip: Chip
+    state: str
+    lease: dict | None
+    pids: list[int]
+    overstayed: bool = False
 
 
 class Gatekeeper:
@@ -254,3 +267,81 @@ class Gatekeeper:
         finally:
             with contextlib.suppress(OSError):
                 os.rmdir(path)
+
+    # ---- topology (cached; sysfs is cheap but we read it once per run) -----
+
+    @property
+    def boards(self) -> list[Board]:
+        if getattr(self, "_boards", None) is None:
+            self._boards = read_topology(self.sysfs_root)
+        return self._boards
+
+    @property
+    def grain(self) -> str:
+        return lease_grain(self.boards)
+
+    def unit_key_for(self, chip: Chip, grain: str | None = None) -> str:
+        """Board serial at board grain, BDF at chip grain."""
+        return chip.serial if (grain or self.grain) == "board" else chip.bdf
+
+    def chips_in_unit(self, unit_key: str) -> list[Chip]:
+        if self.grain == "board":
+            for b in self.boards:
+                if b.serial == unit_key:
+                    return list(b.chips)
+            return []
+        return [c for c in all_chips(self.boards) if c.bdf == unit_key]
+
+    # ---- reconciliation ---------------------------------------------------
+
+    def reconcile(self, reap: bool = True) -> list[ChipState]:
+        """Compare lease bookkeeping against kernel truth.
+
+        The lease file says who and why; only an open fd proves a chip is in use.
+        Reaping is deliberately conservative: a lease is only removed when its
+        process is *gone* and no fd remains. A live process that has run past its
+        advisory expect_done is reported OVERSTAYED and left strictly alone --
+        never be greedy, make sure a process is completely done.
+        """
+        fd_map = procfd.holders(self.proc_root)
+        held = self.held_units()
+        now = utcnow()
+
+        results: list[ChipState] = []
+        reapable: list[tuple[str, dict]] = []
+
+        for chip in all_chips(self.boards):
+            unit = self.unit_key_for(chip)
+            lease = held.get(unit)
+            pids = fd_map.get(chip.dev_index, [])
+
+            if lease is None:
+                results.append(ChipState(chip, "BUSY-UNTRACKED" if pids else "FREE",
+                                         None, pids))
+                continue
+
+            owner = lease.get("pid")
+            owner_pgid = lease.get("pgid")
+            overstayed = bool(lease.get("expect_done")) and lease["expect_done"] < now
+
+            if pids:
+                owned = any(p == owner or p == owner_pgid for p in pids)
+                state = "HELD" if owned else "HELD-FOREIGN"
+            elif owner is not None and procfd.pid_alive(owner, self.proc_root):
+                state = "CLAIMED"
+            else:
+                state = "STALE"
+                if (unit, lease) not in reapable:
+                    reapable.append((unit, lease))
+
+            results.append(ChipState(chip, state, lease, pids, overstayed))
+
+        if reap and reapable:
+            for unit, lease in reapable:
+                self.release_unit(unit)
+                if lease.get("lease_id"):
+                    self.delete_lease(lease["lease_id"])
+            # Re-derive so callers see FREE rather than the pre-reap STALE.
+            return self.reconcile(reap=False)
+
+        return results
