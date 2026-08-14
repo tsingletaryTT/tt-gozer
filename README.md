@@ -116,15 +116,23 @@ position, so a loop is always safe.
 
 **Asking for one chip may correctly get you two.**
 
-UMD expands `TT_VISIBLE_DEVICES` to every chip on the same board when a board holds two chips
-or fewer (`cluster_descriptor.cpp: create_constrained_cluster_descriptor`). On a p300c that
-means a single ASIC cannot be handed to any tt-metal / TTNN / vLLM workload — you always get
-the pair.
+On a p300c, requesting one chip through UMD's constrained-device / visibility path may expose
+**both** chips on the same board. UMD expands `TT_VISIBLE_DEVICES` to every chip on a board
+holding two chips or fewer (`cluster_descriptor.cpp: create_constrained_cluster_descriptor`).
 
-gozer applies the same predicate rather than assuming a layout: **board grain when boards
-hold ≤2 chips, chip grain otherwise.** So a QuietBox supports two concurrent tenants, a p150
-host one per card, and a Galaxy one per chip, with no configuration. When your grant is wider
-than your request, the output says so instead of quietly rounding.
+The caveat matters: direct TTNN device access can still open a single enumerated chip. So
+single-chip work is not impossible — but `TT_VISIBLE_DEVICES`, the mechanism you would
+normally reach for to fence a workload, **does not fence below board granularity** on such a
+board.
+
+That is precisely why gozer leases the board. A single-chip lease would be one you cannot
+enforce: set `TT_VISIBLE_DEVICES` to one chip and the process may still see its neighbour's.
+Handing out the pair is the only grant that means what it says.
+
+gozer derives this from the same predicate rather than assuming a layout: **board grain when
+boards hold ≤2 chips, chip grain otherwise.** So a QuietBox supports two concurrent tenants,
+a p150 host one per card, and a Galaxy one per chip, with no configuration. When your grant
+is wider than your request, the output says so instead of quietly rounding.
 
 ## What it guarantees, and what it doesn't
 

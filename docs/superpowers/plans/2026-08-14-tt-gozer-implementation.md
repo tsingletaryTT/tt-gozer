@@ -3427,8 +3427,12 @@ Read the output. Three things matter:
 1. **The export line.** Run it, or pass the value through to your process.
    `TT_VISIBLE_DEVICES` is BDFs, not indices.
 2. **The expansion note.** On a 2-chip board (a p300c QuietBox) asking for 1 chip
-   grants 2 — UMD widens visibility to the whole board and there is no way around
-   it. You got both; that is correct, not a bug.
+   grants 2. Requesting one chip through UMD's constrained-device / visibility
+   path may expose both chips on the same board, so `TT_VISIBLE_DEVICES` cannot
+   fence you to one of them. You got both; that is correct, not a bug. Direct
+   TTNN device access *can* open a single enumerated chip — but a lease scoped
+   narrower than the fence that enforces it would be a lease in name only, so
+   gozer grants the pair.
 3. **Any eth-neighbour warning.** It means another tenant shares your board's
    hardwired mesh and your reset on release may perturb them. Proceed, but say so
    if something odd happens to them.
@@ -3637,9 +3641,15 @@ is plain JSON so a similar agent daemon could read or adopt it.
 
 UMD expands `TT_VISIBLE_DEVICES` to every chip on the same board when a board
 holds two chips or fewer (`cluster_descriptor.cpp:
-create_constrained_cluster_descriptor`). On a p300c that means a single ASIC
-cannot be handed to a tt-metal/TTNN workload — you always get the pair. gozer
-applies the same predicate: **board grain for ≤2-chip boards, chip grain
+create_constrained_cluster_descriptor`). On a p300c, requesting one chip through
+that constrained-device / visibility path may expose both chips on the board.
+
+Direct TTNN device access can still open a single enumerated chip, so single-chip
+work is not impossible — but `TT_VISIBLE_DEVICES`, the mechanism you would use to
+fence a workload, does not fence below board granularity here. A single-chip
+lease would be unenforceable, so gozer grants the board.
+
+gozer applies the same predicate: **board grain for ≤2-chip boards, chip grain
 otherwise.** So a QuietBox supports two concurrent tenants, a p150 host one per
 card, and a Galaxy one per chip, with no configuration.
 

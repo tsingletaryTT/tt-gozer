@@ -80,8 +80,19 @@ if (expand_to_same_boards)
 ```
 
 A p300c has exactly 2 chips per board, and `2 > 2` is false, so expansion stays **on**.
-Setting `TT_VISIBLE_DEVICES=2` silently yields chips {2,3}. A single chip of a p300c cannot
-be handed to any tt-metal / TTNN / vLLM workload — UMD widens it to the board.
+Setting `TT_VISIBLE_DEVICES=2` silently yields chips {2,3}.
+
+Stated precisely: **on a p300c, requesting one chip through UMD's constrained-device /
+visibility path may expose both chips on the same board.** The caveat is that direct TTNN
+device access can still open a single enumerated chip — so single-chip work is not
+impossible, and an earlier draft of this document overstated it as such.
+
+What follows for the design is unchanged, and in fact rests on the caveat rather than
+despite it: the mechanism a caller would normally use to fence a workload,
+`TT_VISIBLE_DEVICES`, **does not fence below board granularity** on a ≤2-chip board. A
+single-chip lease would therefore be unenforceable — gozer could grant chip 2 while the
+tenant's process still sees chip 3. Leasing the board is the only grant whose boundary is
+real.
 
 **Derived rule, not a hardcoded one:** the gatekeeper leases per *board* when a board holds
 ≤2 chips, and per *chip* when it holds more — the same predicate UMD uses. This is correct
