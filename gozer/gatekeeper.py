@@ -26,10 +26,14 @@ import os
 import secrets
 import time
 from dataclasses import dataclass
-from datetime import datetime
 
 from gozer import procfd
-from gozer.jsonstore import _atomic_write_json, _read_json, utcnow
+# _elapsed_seconds lives in jsonstore (the shared, dependency-free home) so
+# gozer/queue.py can use the same implementation without importing this
+# module, which would be an import cycle. Imported into this namespace
+# because reconcile() calls it by bare name.
+from gozer.jsonstore import (_atomic_write_json, _elapsed_seconds, _read_json,
+                             utcnow)
 from gozer.queue import CLAIM_WINDOW_SECONDS, TicketQueue
 from gozer.topology import Board, Chip, all_chips, lease_grain, read_topology
 
@@ -61,17 +65,6 @@ DETACHED_GRACE_SECONDS = 900
 # ("expect a lease record carrying no lease_id") stays distinguishable from
 # passing nothing ("release whatever is there, unconditionally").
 _UNCHECKED = object()
-
-
-def _elapsed_seconds(since: str, now: str) -> float:
-    """Seconds between two utcnow()-formatted timestamps.
-
-    Both `since` and `now` are the fixed "%Y-%m-%dT%H:%M:%SZ" format every
-    lease timestamp in this codebase uses (see jsonstore.utcnow), so a plain
-    strptime-and-subtract is exact -- no timezone-library dependency needed.
-    """
-    fmt = "%Y-%m-%dT%H:%M:%SZ"
-    return (datetime.strptime(now, fmt) - datetime.strptime(since, fmt)).total_seconds()
 
 
 # Re-exported so `from gozer.gatekeeper import CLAIM_WINDOW_SECONDS` (used by

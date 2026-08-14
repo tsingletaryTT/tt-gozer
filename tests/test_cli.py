@@ -140,6 +140,26 @@ def test_wait_times_out_and_exits_11(env, capsys):
     assert code == 11
 
 
+def test_status_survives_a_corrupt_since_timestamp(env, capsys):
+    """A corrupt state file must not masquerade as "the box is busy".
+
+    cli.main maps a stray ValueError to exit 12 ("unavailable and queueing
+    disabled"), so an unparseable `since` used to tell every agent on the box
+    to keep waiting for hardware that was in fact free.
+    """
+    from gozer.gatekeeper import Gatekeeper
+    gk = Gatekeeper()
+    lease = {"lease_id": "bad", "detached": True, "since": "not-a-timestamp",
+             "chips": ["0000:01:00.0"], "dev_indices": [0],
+             "units": ["0000000000000002"], "who": "claude:x", "pid": 1}
+    gk.claim_unit("0000000000000002", lease)
+    gk.write_lease(lease)
+
+    code, out = run(["status", "--json"], capsys)
+    assert code == 0
+    assert "FREE" in out
+
+
 def test_unreadable_topology_exits_14(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("GOZER_ROOT", str(tmp_path / "state"))
     monkeypatch.setenv("GOZER_SYSFS_ROOT", str(tmp_path / "nothing"))

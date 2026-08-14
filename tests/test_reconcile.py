@@ -152,6 +152,23 @@ def test_detached_lease_past_the_grace_window_is_stale_and_reaped(tmp_path, sysf
     assert gk.read_lease("aaa") is None
 
 
+def test_malformed_since_is_treated_as_maximally_old_not_as_an_error(tmp_path, sysfs):
+    # A present-but-unparseable `since` used to raise ValueError out of
+    # reconcile, which cli.main catches broadly and turns into exit 12 --
+    # documented as "unavailable and queueing disabled". An agent reading that
+    # concludes the box is busy and retries forever instead of surfacing a
+    # corrupt state file. Treat it exactly like a missing `since`: maximally
+    # old, so the ordinary stale path reaps it.
+    gk = make(tmp_path, sysfs)
+    lease = lease_for(gk, ["0000:01:00.0", "0000:02:00.0"], pid=4242,
+                      detached=True, since="last Tuesday")
+    gk.claim_unit("0000000000000002", lease)
+    gk.write_lease(lease)
+    result = {s.chip.dev_index: s.state for s in gk.reconcile(reap=True)}
+    assert result[0] == "FREE" and result[1] == "FREE"
+    assert gk.unit_lease("0000000000000002") is None
+
+
 def test_non_detached_lease_held_by_a_different_pid_is_still_held_foreign(tmp_path, sysfs):
     # Proves the detached branch narrowed HELD-FOREIGN rather than removing
     # it: a `gozer run`-style lease (detached=False) really does know who

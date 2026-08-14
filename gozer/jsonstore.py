@@ -14,8 +14,35 @@ import os
 from datetime import datetime, timezone
 
 
+TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
+
+
 def utcnow() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(timezone.utc).strftime(TIMESTAMP_FORMAT)
+
+
+def _elapsed_seconds(since: str, now: str) -> float:
+    """Seconds between two utcnow()-formatted timestamps.
+
+    Both arguments are the fixed TIMESTAMP_FORMAT every lease and ticket
+    timestamp in this codebase uses, so a plain strptime-and-subtract is
+    exact -- no timezone-library dependency needed.
+
+    A timestamp that will not parse returns inf ("maximally old"), matching
+    how a *missing* timestamp is already treated by every caller. It must not
+    raise: state files are hand-editable and world-writable, and cli.main
+    turns a stray ValueError into exit 12, documented as "unavailable and
+    queueing disabled" -- so one corrupt `since` field would tell every agent
+    on the box that the hardware is busy, and they would retry forever
+    instead of surfacing a corrupt state file. Reporting a corrupt record as
+    ancient hands it to the ordinary stale path, where it gets reaped and
+    logged as what it is.
+    """
+    try:
+        return (datetime.strptime(now, TIMESTAMP_FORMAT)
+                - datetime.strptime(since, TIMESTAMP_FORMAT)).total_seconds()
+    except (TypeError, ValueError):
+        return float("inf")
 
 
 def _atomic_write_json(path: str, payload: dict, tmp: str | None = None) -> None:
