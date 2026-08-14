@@ -2,6 +2,8 @@ import os
 import signal
 import subprocess
 import sys
+import threading
+import time
 import pytest
 from gozer.gatekeeper import Gatekeeper
 from gozer.keymaster import Keymaster, Grant, parse_duration
@@ -67,6 +69,14 @@ def test_acquire_rolls_back_units_it_already_won_if_it_loses_a_later_race(tmp_pa
     # the second of two chip-grain units to lose claim_unit, and prove the
     # first unit -- which *did* win -- is not left stranded, held by no lease.
     km, gk = make(tmp_path, sysfs, chips=GALAXY_LIKE)  # chip grain: 1 bdf per unit
+    # Mark the lowest-indexed chip clean beforehand: _unit_sort_key sorts
+    # clean units first regardless of device index, so this chip is the one
+    # allocate() picks first, and therefore the one claim_unit succeeds on
+    # before the race is lost on the second unit -- exactly the scenario
+    # where a naive rollback would wrongly scrub a marker it never should
+    # have touched (see the is_clean assertion below).
+    gk.mark_clean("0000:01:00.0")
+
     real_claim = gk.claim_unit
     won = []
 
@@ -80,10 +90,16 @@ def test_acquire_rolls_back_units_it_already_won_if_it_loses_a_later_race(tmp_pa
     result = km.acquire("2", who="claude:test", pid=1)
 
     assert not isinstance(result, Grant)          # falls back to a queue ticket
-    assert won                                     # the race actually happened
+    assert won == ["0000:01:00.0"]                # the race actually happened,
+                                                    # and happened on the clean unit
     assert gk.unit_lease(won[0]) is None            # rolled back, not stranded
     assert gk.held_units() == {}
     assert gk.all_leases() == []
+    # The unit that WAS won, and was clean before this aborted request ever
+    # touched it, must still be clean -- clear_clean must not run until every
+    # unit in the request has been claimed, or a rolled-back request leaves
+    # an untouched board wrongly needing a reset it never required.
+    assert gk.is_clean("0000:01:00.0") is True
 
 
 def test_third_acquire_is_queued_with_a_ticket(tmp_path, sysfs):
@@ -130,6 +146,18 @@ def test_env_emits_comma_separated_bdfs(tmp_path, sysfs):
     assert ":" in env["TT_VISIBLE_DEVICES"]   # BDFs, never bare integers
 
 
+def test_env_for_a_raw_lease_dict_reads_the_chips_key(tmp_path, sysfs):
+    # env_for() has two branches -- a Grant, or a raw lease dict (e.g. as
+    # returned by gk.read_lease()). Only the Grant branch was covered.
+    km, gk = make(tmp_path, sysfs)
+    grant = km.acquire("1", who="claude:test", pid=1)
+    lease = gk.read_lease(grant.lease_id)
+    assert isinstance(lease, dict)
+    env = km.env_for(lease)
+    assert env["TT_VISIBLE_DEVICES"] == ",".join(lease["chips"])
+    assert env["TT_VISIBLE_DEVICES"] == ",".join(grant.bdfs)
+
+
 def test_release_frees_the_unit_and_resets(tmp_path, sysfs):
     calls = []
     km, gk = make(tmp_path, sysfs)
@@ -149,6 +177,22 @@ def test_release_marks_the_unit_clean_for_fresh_requests(tmp_path, sysfs):
     grant = km.acquire("1", who="claude:test", pid=1)
     km.release(grant.lease_id)
     assert gk.is_clean(grant.units[0]) is True
+
+
+def test_release_of_a_failed_reset_does_not_mark_clean_but_still_tears_down(tmp_path, sysfs):
+    # Global constraint: "a unit is marked clean only when the reset
+    # actually succeeded." A unit wrongly marked clean would be handed to a
+    # --fresh requester as reset silicon when it was never actually reset.
+    km, gk = make(tmp_path, sysfs)
+    km.reset_runner = lambda argv, **kw: _Fail()
+    grant = km.acquire("1", who="claude:test", pid=1)
+    ok, msg = km.release(grant.lease_id)
+    assert ok is True                              # a failed reset must not
+                                                     # strand the lease
+    assert gk.is_clean(grant.units[0]) is False      # never marked clean
+    assert gk.unit_lease(grant.units[0]) is None     # unit is still released
+    assert gk.read_lease(grant.lease_id) is None
+    assert "failed" in msg.lower()
 
 
 def test_release_with_no_reset_skips_the_reset(tmp_path, sysfs):
@@ -226,6 +270,57 @@ def test_run_releases_when_the_child_is_killed(tmp_path, sysfs):
     assert gk.all_leases() == []
 
 
+@pytest.mark.timeout(5)
+def test_run_forwards_sigterm_to_a_running_child(tmp_path, sysfs):
+    # test_run_releases_when_the_child_is_killed sends the signal *inside*
+    # the child, to its own pid -- it proves release survives an unclean
+    # child exit, but never exercises run()'s own SIGINT/SIGTERM handlers or
+    # _forward at all. This test sends the signal to the *parent* (this
+    # process, running km.run()) while it is genuinely blocked in
+    # proc.wait() on a long-lived child, so _forward actually has to fire
+    # and actually has to call proc.send_signal for the child to die.
+    #
+    # Bounded by @pytest.mark.timeout(5): the child sleeps for 10s, far
+    # longer than the timeout, so if forwarding silently breaks this test
+    # fails fast (via pytest-timeout) instead of hanging the suite.
+    km, gk = make(tmp_path, sysfs)
+    km.reset_runner = lambda argv, **kw: _Ok()
+
+    def send_after_a_beat():
+        time.sleep(0.5)  # give run() time to acquire and install handlers
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    threading.Thread(target=send_after_a_beat, daemon=True).start()
+    rc = km.run([sys.executable, "-c", "import time; time.sleep(10)"],
+                chips_spec="1", who="claude:test", pid=1)
+    # A child terminated by an uncaught SIGTERM reports a negative
+    # returncode equal to -signum (verified empirically: Popen.wait() after
+    # sending SIGTERM to an unmodified `python3 -c "time.sleep(...)"` child
+    # yields -15). If _forward never fired, the child would instead run to
+    # completion after its full 10s sleep and rc would be 0.
+    assert rc == -signal.SIGTERM
+    assert gk.all_leases() == []
+
+
+@pytest.mark.timeout(5)
+def test_run_forwards_sigint_to_a_running_child(tmp_path, sysfs):
+    km, gk = make(tmp_path, sysfs)
+    km.reset_runner = lambda argv, **kw: _Ok()
+
+    def send_after_a_beat():
+        time.sleep(0.5)
+        os.kill(os.getpid(), signal.SIGINT)
+
+    threading.Thread(target=send_after_a_beat, daemon=True).start()
+    rc = km.run([sys.executable, "-c", "import time; time.sleep(10)"],
+                chips_spec="1", who="claude:test", pid=1)
+    # Python's own SIGINT default handler converts it to KeyboardInterrupt,
+    # but an unmodified child still dies from the raw signal in this setup
+    # (verified empirically): Popen.wait() reports -2 (-SIGINT).
+    assert rc == -signal.SIGINT
+    assert gk.all_leases() == []
+
+
 def test_run_returns_10_when_queued(tmp_path, sysfs):
     km, gk = make(tmp_path, sysfs)
     km.acquire("all", who="claude:hog", pid=1)
@@ -234,5 +329,21 @@ def test_run_returns_10_when_queued(tmp_path, sysfs):
     assert rc == 10
 
 
+def test_run_returns_a_nonzero_int_when_popen_itself_fails(tmp_path, sysfs):
+    # run()'s contract is "-> int": a bad executable must not raise out of
+    # run(), and the lease must still be released by the finally either way.
+    km, gk = make(tmp_path, sysfs)
+    km.reset_runner = lambda argv, **kw: _Ok()
+    rc = km.run(["/no/such/executable-gozer-test"],
+                chips_spec="1", who="claude:test", pid=1)
+    assert isinstance(rc, int)
+    assert rc != 0
+    assert gk.all_leases() == []
+
+
 class _Ok:
     returncode, stdout, stderr = 0, "", ""
+
+
+class _Fail:
+    returncode, stdout, stderr = 1, "", "tt-smi: reset failed"

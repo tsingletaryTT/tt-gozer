@@ -16,6 +16,7 @@ import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
+from gozer import procfd
 from gozer import reset as reset_mod
 from gozer.gatekeeper import Gatekeeper, parse_chip_request, utcnow
 from gozer.topology import Chip, all_chips
@@ -99,11 +100,24 @@ class Keymaster:
             for unit in units:
                 if not self.gk.claim_unit(unit, lease):
                     # Lost a race inside the critical section: roll back cleanly.
+                    # Only the units already claimed need release_unit; none of
+                    # them have had clear_clean called yet (that now happens in
+                    # its own loop below, only once every unit in the request
+                    # has been won), so a clean unit that was never touched by
+                    # this aborted request is not wrongly left marked dirty.
                     for done in units:
                         if done == unit:
                             break
                         self.gk.release_unit(done)
                     return self._ticket_for(ticket, who, pid, min_chips, max_chips)
+
+            # Every unit in the request is claimed now -- only at this point is
+            # it safe to clear each one's clean marker. Doing this inside the
+            # claim loop above would mark an early-won unit dirty even if a
+            # later unit in the same request lost its race and the whole
+            # request rolled back, stranding a needless future reset on a
+            # board no workload ever touched.
+            for unit in units:
                 self.gk.clear_clean(unit)
 
             self.gk.write_lease(lease)
@@ -140,7 +154,6 @@ class Keymaster:
         if lease is None:
             return False, f"lease {lease_id} not found"
 
-        from gozer import procfd
         fd_map = procfd.holders(self.gk.proc_root)
         still_open = [d for d in lease.get("dev_indices", []) if fd_map.get(d)]
         if still_open and not force:
@@ -183,30 +196,80 @@ class Keymaster:
 
         This is the form scripts and skills should prefer: the lease is bound to
         the process, so it cannot leak if an agent is interrupted mid-session.
+
+        SIGINT/SIGTERM are *blocked* -- not just left with their default
+        disposition -- from before acquire() until the forwarding handlers
+        below actually exist. A signal delivered while blocked is not lost:
+        the kernel holds it pending and delivers it the instant we unblock,
+        by which time the handlers are installed and the try/finally that
+        releases the lease is reachable. Without this, a signal arriving in
+        the acquire()-to-handler-install window would hit SIGTERM/SIGINT's
+        default disposition -- process death with no Python running -- and
+        the finally below would never execute, leaking the lease. Blocking
+        briefly defers Ctrl-C during acquire(); that's bounded, because
+        critical_section() has its own timeout and cannot hang forever.
+
+        The handlers cannot be installed any earlier than this (e.g. before
+        acquire()) either: _forward raises when there is no live child to
+        forward to, and installing it before Popen() has even run would mean
+        a signal during acquire() raises out of an acquire() that has not
+        finished building its state, rather than being held pending until
+        there is a well-defined try/finally around it.
         """
-        grant = self.acquire(**acquire_kwargs)
-        if not isinstance(grant, Grant):
-            print(f"queued: ticket {grant['ticket']}", file=sys.stderr)
-            return 10
-
-        env = dict(os.environ)
-        env.update(self.env_for(grant))
-        proc = None
-
-        def _forward(signum, _frame):
-            if proc and proc.poll() is None:
-                proc.send_signal(signum)
-
-        previous = {s: signal.getsignal(s) for s in (signal.SIGINT, signal.SIGTERM)}
-        for s in previous:
-            signal.signal(s, _forward)
+        sigs = (signal.SIGINT, signal.SIGTERM)
+        previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, sigs)
         try:
-            proc = subprocess.Popen(argv, env=env)
-            return proc.wait()
+            grant = self.acquire(**acquire_kwargs)
+            if not isinstance(grant, Grant):
+                print(f"queued: ticket {grant['ticket']}", file=sys.stderr)
+                return 10
+
+            env = dict(os.environ)
+            env.update(self.env_for(grant))
+            proc = None
+
+            def _forward(signum, _frame):
+                # Must never silently swallow a signal. If there is no live
+                # child to forward it to -- Popen has not happened yet, or
+                # the child has already exited -- raise instead of quietly
+                # returning, so control unwinds through the try/finally
+                # below and the lease is released. Returning here would
+                # leave the process looking alive with no way to stop it:
+                # exactly the "gozer run is unkillable" failure mode this
+                # exists to prevent.
+                if proc is not None and proc.poll() is None:
+                    proc.send_signal(signum)
+                else:
+                    raise KeyboardInterrupt(
+                        f"signal {signum} received with no live child to "
+                        "forward it to")
+
+            previous_handlers = {s: signal.getsignal(s) for s in sigs}
+            for s in sigs:
+                signal.signal(s, _forward)
+            # Unblock now that the handlers exist. Anything that arrived
+            # while blocked above is delivered right here, straight into
+            # _forward -- never at a point where the finally below is
+            # unreachable.
+            signal.pthread_sigmask(signal.SIG_UNBLOCK, sigs)
+            try:
+                try:
+                    proc = subprocess.Popen(argv, env=env)
+                except OSError as e:
+                    # Popen itself failed (e.g. a bad executable). The lease
+                    # is still torn down by the finally below; report this
+                    # as an int, not a raised exception, so run()'s -> int
+                    # contract holds on this path too.
+                    print(f"gozer run: failed to start {argv!r}: {e}",
+                          file=sys.stderr)
+                    return 127
+                return proc.wait()
+            finally:
+                for s, handler in previous_handlers.items():
+                    signal.signal(s, handler)
+                self.release(grant.lease_id)
         finally:
-            for s, handler in previous.items():
-                signal.signal(s, handler)
-            self.release(grant.lease_id)
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
 
 
 def _current_user() -> str:
