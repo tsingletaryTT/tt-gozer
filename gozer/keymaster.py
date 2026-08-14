@@ -1,0 +1,231 @@
+"""The keymaster: carries the key.
+
+Turns a request ("I need one chip") into a lease, the TT_VISIBLE_DEVICES the
+caller must honour, and -- for `gozer run` -- a supervised process whose lease
+cannot leak, because release happens in a finally block and on signal.
+"""
+
+from __future__ import annotations
+
+import os
+import re
+import signal
+import socket
+import subprocess
+import sys
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
+
+from gozer import reset as reset_mod
+from gozer.gatekeeper import Gatekeeper, parse_chip_request, utcnow
+from gozer.topology import Chip, all_chips
+
+DURATION_RE = re.compile(r"^(\d+)([smh]?)$")
+
+
+def parse_duration(text: str) -> int:
+    """'90s' -> 90, '45m' -> 2700, '2h' -> 7200, bare digits mean minutes."""
+    m = DURATION_RE.match((text or "").strip().lower())
+    if not m:
+        raise ValueError(f"bad duration: {text!r} (want 90s, 45m, or 2h)")
+    value, unit = int(m.group(1)), m.group(2) or "m"
+    return value * {"s": 1, "m": 60, "h": 3600}[unit]
+
+
+@dataclass
+class Grant:
+    lease_id: str
+    units: list[str]
+    chips: list[Chip]
+    bdfs: list[str]
+    dev_indices: list[int]
+    requested: int
+    expanded: bool = False
+    neighbours: dict[str, str] = field(default_factory=dict)
+
+
+class Keymaster:
+    def __init__(self, gatekeeper: Gatekeeper):
+        self.gk = gatekeeper
+        # Swappable so tests never shell out to a real tt-smi.
+        self.reset_runner = subprocess.run
+
+    # ---- acquire ----------------------------------------------------------
+
+    def acquire(self, chips_spec: str, who: str, reason: str | None = None,
+                exact: str | None = None, fresh: bool = False,
+                expect: str | None = None, pid: int | None = None,
+                ticket: str | None = None):
+        """Return a Grant, or a queue-ticket dict when nothing is available."""
+        pid = pid if pid is not None else os.getpid()
+        total = len(all_chips(self.gk.boards))
+        min_chips, max_chips = parse_chip_request(chips_spec, total)
+
+        with self.gk.critical_section():
+            self.gk.prune_queue()
+
+            # A ticket-holder outside its claim window must wait its turn, and a
+            # newcomer must not jump an open window.
+            if not self.gk.may_claim(ticket):
+                return self._ticket_for(ticket, who, pid, min_chips, max_chips)
+
+            units = self.gk.allocate(min_chips, max_chips, exact=exact, fresh=fresh)
+            if units is None:
+                return self._ticket_for(ticket, who, pid, min_chips, max_chips)
+
+            chips = [c for u in units for c in self.gk.chips_in_unit(u)]
+            chips.sort(key=lambda c: c.dev_index)
+            lease_id = self.gk.new_lease_id()
+            lease = {
+                "lease_id": lease_id,
+                "chips": [c.bdf for c in chips],
+                "dev_indices": [c.dev_index for c in chips],
+                "units": units,
+                "board_serial": chips[0].serial if chips else None,
+                "who": who,
+                "human": _current_user(),
+                "host": socket.gethostname(),
+                "pid": pid,
+                "pgid": _pgid(pid),
+                "session": os.environ.get("CLAUDE_SESSION_ID", ""),
+                "cwd": os.getcwd(),
+                "reason": reason,
+                "since": utcnow(),
+                "expect_done": _deadline(expect),
+                "reset_on_release": True,
+                "state": "active",
+            }
+
+            for unit in units:
+                if not self.gk.claim_unit(unit, lease):
+                    # Lost a race inside the critical section: roll back cleanly.
+                    for done in units:
+                        if done == unit:
+                            break
+                        self.gk.release_unit(done)
+                    return self._ticket_for(ticket, who, pid, min_chips, max_chips)
+                self.gk.clear_clean(unit)
+
+            self.gk.write_lease(lease)
+            if ticket:
+                self.gk.dequeue(ticket)
+
+            return Grant(
+                lease_id=lease_id,
+                units=units,
+                chips=chips,
+                bdfs=[c.bdf for c in chips],
+                dev_indices=[c.dev_index for c in chips],
+                requested=min_chips,
+                expanded=len(chips) > min_chips,
+                neighbours=self.gk.eth_neighbours(units),
+            )
+
+    def _ticket_for(self, ticket, who, pid, min_chips, max_chips) -> dict:
+        """Reuse an existing ticket if the caller has one, else take a new one."""
+        if ticket:
+            for rec in self.gk.queue_entries():
+                if rec.get("ticket") == ticket:
+                    return rec
+        return self.gk.enqueue({
+            "who": who, "pid": pid,
+            "min_chips": min_chips, "max_chips": max_chips,
+        })
+
+    # ---- release ----------------------------------------------------------
+
+    def release(self, lease_id: str, no_reset: bool = False,
+                force: bool = False) -> tuple[bool, str]:
+        lease = self.gk.read_lease(lease_id)
+        if lease is None:
+            return False, f"lease {lease_id} not found"
+
+        from gozer import procfd
+        fd_map = procfd.holders(self.gk.proc_root)
+        still_open = [d for d in lease.get("dev_indices", []) if fd_map.get(d)]
+        if still_open and not force:
+            return False, (
+                f"chips {still_open} still open by "
+                f"{sorted({p for d in still_open for p in fd_map[d]})} -- "
+                "let the work finish, or pass --force")
+
+        messages = []
+        if not no_reset:
+            ok, out = reset_mod.reset_chips(lease["chips"], runner=self.reset_runner)
+            messages.append(out or ("reset ok" if ok else "reset failed"))
+            if ok:
+                for unit in lease.get("units", []):
+                    self.gk.mark_clean(unit)
+            else:
+                messages.append("reset failed -- unit released but NOT marked clean")
+
+        for unit in lease.get("units", []):
+            self.gk.release_unit(unit)
+        self.gk.delete_lease(lease_id)
+
+        # Hand the freed chips to whoever is next in line.
+        head = self.gk.queue_entries()
+        if head:
+            self.gk.open_claim_window(head[0]["ticket"])
+            messages.append(f"claim window opened for {head[0]['who']}")
+
+        return True, "; ".join(m for m in messages if m)
+
+    # ---- env and run ------------------------------------------------------
+
+    def env_for(self, grant_or_lease) -> dict[str, str]:
+        bdfs = (grant_or_lease.bdfs if isinstance(grant_or_lease, Grant)
+                else grant_or_lease["chips"])
+        return {"TT_VISIBLE_DEVICES": ",".join(bdfs)}
+
+    def run(self, argv: list[str], **acquire_kwargs) -> int:
+        """Acquire, run, always release -- including on signal.
+
+        This is the form scripts and skills should prefer: the lease is bound to
+        the process, so it cannot leak if an agent is interrupted mid-session.
+        """
+        grant = self.acquire(**acquire_kwargs)
+        if not isinstance(grant, Grant):
+            print(f"queued: ticket {grant['ticket']}", file=sys.stderr)
+            return 10
+
+        env = dict(os.environ)
+        env.update(self.env_for(grant))
+        proc = None
+
+        def _forward(signum, _frame):
+            if proc and proc.poll() is None:
+                proc.send_signal(signum)
+
+        previous = {s: signal.getsignal(s) for s in (signal.SIGINT, signal.SIGTERM)}
+        for s in previous:
+            signal.signal(s, _forward)
+        try:
+            proc = subprocess.Popen(argv, env=env)
+            return proc.wait()
+        finally:
+            for s, handler in previous.items():
+                signal.signal(s, handler)
+            self.release(grant.lease_id)
+
+
+def _current_user() -> str:
+    try:
+        import pwd
+        return pwd.getpwuid(os.getuid()).pw_name
+    except Exception:  # noqa: BLE001 - identity is nice-to-have, never fatal
+        return os.environ.get("USER", "unknown")
+
+
+def _pgid(pid: int) -> int | None:
+    try:
+        return os.getpgid(pid)
+    except OSError:
+        return None
+
+
+def _deadline(expect: str | None) -> str | None:
+    if not expect:
+        return None
+    end = datetime.now(timezone.utc) + timedelta(seconds=parse_duration(expect))
+    return end.strftime("%Y-%m-%dT%H:%M:%SZ")
