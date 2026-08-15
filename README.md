@@ -103,6 +103,7 @@ carry the outcome, so no output parsing is required:
 | `14` | topology unreadable |
 | `15` | release refused, nothing done — a device is still open, or the lease's units now belong to someone else |
 | `16` | the allocator mutex is stuck; the message names the path to clear |
+| `130` | `gozer run` was interrupted (SIGINT/SIGTERM); the lease was still released |
 | `130` | `gozer run` interrupted by a signal (128 + SIGINT); the lease was released |
 
 Waiting is designed around agents: `acquire` never blocks, so an agent gets a ticket and can
