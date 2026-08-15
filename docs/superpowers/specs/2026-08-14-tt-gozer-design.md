@@ -307,8 +307,14 @@ Aliases, because the theme earns two: `gozer summon` → `acquire`, `gozer banis
 the lease cannot leak.
 
 Exit codes: `0` granted/success · `10` queued (ticket on stdout) · `11` wait timed out,
-still queued · `12` unavailable and queueing disabled · `13` lease not found or not owned ·
+still queued · `12` unavailable and queueing disabled · `13` no such lease or ticket ·
 `14` topology unreadable.
+
+*Amended during implementation:* `13` originally read "lease not found **or not owned**".
+Nothing checks ownership, and nothing should: `gozer-gatekeeper` deliberately tells a human
+or a successor agent to release someone else's stale lease, and enforcement would break that
+recovery path. The tool is advisory by design (see [Enforcement](#enforcement-and-its-limits)),
+so the documentation was corrected rather than the code.
 
 *Amended during implementation:* `--refresh` is gone from `topology` — there is no topology
 cache to bypass, and a flag that is accepted and never read is a placebo. Two codes were

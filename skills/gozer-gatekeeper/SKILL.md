@@ -14,16 +14,19 @@ about to reset and want to know whether that is safe.
 gozer status
 ```
 
-Every chip is in exactly one of six states. What each means, and what to do:
+Every chip is in exactly one of six states. **The table defining them lives in
+`~/code/tt-gozer/README.md`, under "How it decides what's free" — read it
+there.**
+It is deliberately not duplicated here: this file is the copy an agent reads
+instead of the code, so it is the copy most likely to drift.
 
-| State | Meaning | Do |
-|-------|---------|-----|
-| `FREE` | No lease, nothing holding it | Acquire it. |
-| `HELD` | Leased, and the device fd is open — by the lease's own supervised process, or (for a detached lease from a standalone `gozer acquire`) by whatever process opened it | Nothing. Working as intended. |
-| `CLAIMED` | Leased, no fd open yet — the owning process is alive and just hasn't opened the device, or (for a detached lease) it is still inside its 900-second grace window | Nothing. Setup phase, or between runs. |
-| `HELD-FOREIGN` | Leased to one pid, a *different* pid has it open | Investigate before anything else — the lease is lying. Does not apply to detached leases: any holder at all counts as expected, since a standalone `acquire` never knew its eventual workload's pid. |
-| `BUSY-UNTRACKED` | No lease, but a process has it open | Do not take it. Adopt it (below). |
-| `STALE` | Leased, no fd, and the owning process is gone — or, for a detached lease, its 900-second grace window elapsed with the device never opened | Already reaped for you; re-run `gozer status`. |
+What to do about each, which the README does not say:
+
+- `FREE` — acquire it.
+- `HELD`, `CLAIMED` — nothing. Working as intended.
+- `HELD-FOREIGN` — investigate before anything else; the lease is lying.
+- `BUSY-UNTRACKED` — do not take it. Adopt it (below).
+- `STALE` — already reaped for you; re-run `gozer status`.
 
 `OVERSTAYED` is a flag, not a state: the lease ran past its advisory `--expect`.
 Whatever is holding the chip (fd open, or a detached lease still inside its

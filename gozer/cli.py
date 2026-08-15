@@ -21,6 +21,11 @@ EXIT_OK = 0
 EXIT_QUEUED = 10
 EXIT_WAIT_TIMEOUT = 11
 EXIT_UNAVAILABLE = 12
+# "No such lease or ticket" -- and nothing more. Ownership is deliberately
+# NOT checked anywhere: the gatekeeper skill tells a human or a successor
+# agent to release someone else's stale lease, which is the recovery path an
+# ownership check would break. gozer is advisory, and any local user can
+# release any lease; see the README's guarantees section.
 EXIT_NO_LEASE = 13
 EXIT_NO_TOPOLOGY = 14
 # Release refused and did nothing: a device is still open, or the units have

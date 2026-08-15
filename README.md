@@ -137,6 +137,13 @@ is wider than your request, the output says so instead of quietly rounding.
 entirely. What gozer guarantees is that ignoring it is *visible* — such a chip shows as
 `BUSY-UNTRACKED` and is never handed to anyone else.
 
+**Leases are not owned.** Any local user can release, renew or reap any lease — nothing
+checks who took it. That is deliberate, not an omission: releasing someone else's abandoned
+lease is exactly what `gozer-gatekeeper` tells a human or a successor agent to do when an
+agent dies mid-run, and an ownership check would wall off that recovery path. Exit `13`
+means "no such lease or ticket", never "not yours". The lease records *who and why* so people
+can coordinate; enforcement is not on offer here — see the bottom of this section.
+
 **fd truth is same-user.** `/proc/<pid>/fd` is readable only by its owner, so ground truth
 covers your own processes — the common case, where every agent runs as you. Cross-user
 detection falls back to the world-readable lease files, i.e. cooperation.
