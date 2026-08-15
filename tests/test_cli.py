@@ -1,3 +1,4 @@
+import contextlib
 import json
 import os
 import pytest
@@ -248,6 +249,47 @@ def test_release_while_a_device_is_open_has_its_own_exit_code(env, capsys, tmp_p
 
     assert code == 15
     assert "still open" in out
+
+
+def test_a_stuck_mutex_reports_itself_instead_of_traceback(env, capsys, monkeypatch):
+    """`status` can now hit the mutex, so it must handle a stuck one.
+
+    The reap inside reconcile takes the mutex (that is what stops it deleting
+    a lock another process just created), which makes TimeoutError reachable
+    from a read-only command for the first time. Unhandled it exits 1 with a
+    traceback -- from the one command the gatekeeper skill tells you to run
+    when the gate looks wedged.
+    """
+    from gozer import gatekeeper as gk_mod
+    from gozer.gatekeeper import Gatekeeper
+
+    # Give the reap something to do -- reconcile only reaches for the mutex
+    # when it actually has a lock to delete.
+    gk = Gatekeeper()
+    stale = {"lease_id": "old", "detached": True, "since": "2000-01-01T00:00:00Z",
+             "chips": ["0000:01:00.0"], "dev_indices": [0],
+             "units": ["0000000000000002"], "who": "claude:crashed", "pid": 4242}
+    gk.claim_unit("0000000000000002", stale)
+    gk.write_lease(stale)
+
+    # Stand in for a mutex held by another user that we cannot clear: waiting
+    # it out for real would take the full 10-second timeout.
+    monkeypatch.setattr(gk_mod.Gatekeeper, "critical_section",
+                        lambda self, timeout=10.0: _stuck_mutex())
+
+    code, _ = run(["status"], capsys)
+    assert code == 16
+
+
+@contextlib.contextmanager
+def _stuck_mutex():
+    """A critical_section that behaves exactly as a wedged one does: raises
+    TimeoutError from __enter__, carrying the message the real implementation
+    composes (it names the path and how to clear it)."""
+    raise TimeoutError(
+        "gatekeeper mutex is stuck; remove /tmp/tt-gozer/mutex/.gatekeeper.lock "
+        "if no gozer is running")
+    yield  # pragma: no cover - unreachable; keeps this a generator function
 
 
 def test_topology_no_longer_accepts_a_refresh_flag(env, capsys):

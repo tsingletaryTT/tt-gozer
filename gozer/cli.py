@@ -33,6 +33,13 @@ EXIT_NO_TOPOLOGY = 14
 # right now" -- overloading that told an agent to go wait for hardware when
 # what it actually needed was to stop its own workload first.
 EXIT_RELEASE_REFUSED = 15
+# The allocator mutex could not be taken. Newly reachable from read-only
+# commands: `status` reconciles, and a reconcile that finds something to reap
+# now takes the mutex to do it (so it cannot delete a lock another process
+# just created). A cross-user wedged mutex therefore surfaces here rather
+# than as a traceback -- and `gozer status` is exactly where the gatekeeper
+# skill sends someone whose gate looks wedged.
+EXIT_GATE_STUCK = 16
 # Conventional 128 + SIGINT, for `gozer run` interrupted by a signal.
 EXIT_INTERRUPTED = 130
 
@@ -426,6 +433,14 @@ def main(argv: list[str]) -> int:
     except TopologyError as e:
         print(f"gozer: {e}", file=sys.stderr)
         return EXIT_NO_TOPOLOGY
+    except TimeoutError as e:
+        # critical_section composes a message that names the mutex path, its
+        # owning uid when that is the problem, and how to clear it by hand --
+        # print it as-is rather than a traceback. Caught before the
+        # ValueError arm for the same reason TicketNotFound is: a stuck gate
+        # is not a bad argument.
+        print(f"gozer: {e}", file=sys.stderr)
+        return EXIT_GATE_STUCK
     except TicketNotFound as e:
         # Checked before the ValueError arm below (TicketNotFound is one), so
         # a vanished ticket reports "no such lease or ticket" rather than
