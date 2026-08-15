@@ -18,6 +18,24 @@ chips without naming them, and non-Claude flows should be able to join.
 Named in a follow-up: "The keymaster must meet the gatekeeper to allow the coming
 of gozer."
 
+**Final review pass (2026-08-14).** A whole-branch review found two lock-deleting
+concurrency races the 162-test suite could not see, because the only concurrency
+test raced `claim_unit` — a bare `mkdir`, the one primitive never in doubt. Fixed
+in `62eb0bf`..`8c1808c`; see `.superpowers/sdd/2026-08-14-tt-gozer-implementation/
+final-fix-report.md` for the full account, including the RED output the new
+concurrency tests produce against the pre-fix code.
+
+The two that mattered: `reconcile`'s reap ran outside the mutex and deleted
+whatever lock it found (so a `gozer status` could delete a lease granted
+milliseconds earlier), and `Keymaster.release` revalidated nothing (so releasing
+a stale lease by hand could reset the *next* tenant's chips mid-startup). Both
+now re-read the gate under the mutex, and `release_unit` carries the lease_id
+guard in the primitive so no future caller can reintroduce either.
+
+Also: the queue had never worked on a real box — tickets were pruned as
+"dead waiters" milliseconds after creation, the detached-lease bug never carried
+over to tickets — and `--no-queue` queued anyway.
+
 ## Key decisions and why
 
 * **CLI + thin skills**, not logic inside skills. Race-sensitive code belongs in
