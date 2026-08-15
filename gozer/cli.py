@@ -170,8 +170,19 @@ def cmd_wait(args) -> int:
             # cmd_acquire (see its comment). `wait` claims on behalf of
             # whichever CLI invocation originally enqueued the ticket, and
             # that invocation is long gone by now.
-            result = km.acquire(f"{entry['min_chips']}-{entry['max_chips']}",
-                                who=entry["who"], ticket=args.ticket)
+            #
+            # The whole original request is replayed from the ticket, not
+            # just its chip count: --exact, --fresh, --reason and --expect
+            # are part of what was asked for, and dropping them hands a
+            # queued agent something it did not ask for. `chips_spec` is
+            # absent on tickets written by an older gozer still sitting in
+            # the queue, hence the min-max fallback.
+            result = km.acquire(
+                entry.get("chips_spec")
+                or f"{entry['min_chips']}-{entry['max_chips']}",
+                who=entry["who"], reason=entry.get("reason"),
+                exact=entry.get("exact"), fresh=entry.get("fresh", False),
+                expect=entry.get("expect"), ticket=args.ticket)
             if isinstance(result, Grant):
                 payload = {"granted": True, "lease_id": result.lease_id,
                            "chips": result.bdfs, "env": km.env_for(result)}

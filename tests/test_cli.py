@@ -175,6 +175,33 @@ def test_wait_keeps_the_callers_ticket_and_leaves_no_orphan(env, capsys):
     assert [e["ticket"] for e in json.loads(q)["queue"]] == [ticket]
 
 
+def test_wait_replays_the_exact_request_that_was_queued(env, capsys):
+    """A queued `--exact` must still mean that chip when the wait is granted.
+
+    cmd_wait used to rebuild the request from min_chips/max_chips alone, so
+    --exact, --fresh, --reason and --expect were silently dropped and the
+    agent got whichever board freed first. The keymaster skill teaches
+    --exact and --fresh explicitly, so this was a documented promise the
+    tool did not keep.
+    """
+    _, out = run(["acquire", "--chips", "all", "--who", "hog", "--json"], capsys)
+    hog = json.loads(out)["lease_id"]
+
+    # Chip 2 lives on the *other* board from the one allocate would pick by
+    # default (lowest device index wins), so this discriminates.
+    _, out = run(["acquire", "--chips", "1", "--exact", "2", "--who", "w",
+                  "--reason", "repro", "--json"], capsys)
+    ticket = json.loads(out)["ticket"]
+    _, q = run(["queue", "--json"], capsys)
+    assert json.loads(q)["queue"][0]["exact"] == "2"
+
+    run(["release", hog], capsys)
+    code, out = run(["wait", ticket, "--timeout", "5s", "--json"], capsys)
+
+    assert code == 0
+    assert json.loads(out)["chips"] == ["0000:03:00.0", "0000:04:00.0"]
+
+
 def test_acquire_with_an_unknown_ticket_exits_13(env, capsys):
     """A ticket that is not in the queue is an error, never a silent new
     ticket issued under the caller's nose."""

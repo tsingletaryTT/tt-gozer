@@ -91,12 +91,25 @@ class Keymaster:
         total = len(all_chips(self.gk.boards))
         min_chips, max_chips = parse_chip_request(chips_spec, total)
         # Everything a later `gozer wait` needs to replay this exact request
-        # on the caller's behalf. `detached` decides how the queue judges the
-        # ticket's owner as gone (see queue.DETACHED_TICKET_MAX_AGE_SECONDS):
-        # the same distinction leases already make, for the same reason.
+        # on the caller's behalf. Recording only min/max chips (as this used
+        # to) silently dropped --exact, --fresh, --reason and --expect, so a
+        # queued agent that asked for one specific chip, or for reset silicon,
+        # got whichever board happened to free first -- while the keymaster
+        # skill actively teaches both flags.
+        #
+        # min_chips/max_chips stay alongside chips_spec because `gozer status`
+        # and `gozer queue` render them, and because they are what a human
+        # reading queue/*.json by hand wants to see.
+        #
+        # `detached` decides how the queue judges the ticket's owner as gone
+        # (see queue.DETACHED_TICKET_MAX_AGE_SECONDS): the same distinction
+        # leases already make, for the same reason.
         request = {
             "who": who, "pid": pid, "detached": detached,
+            "chips_spec": chips_spec,
             "min_chips": min_chips, "max_chips": max_chips,
+            "exact": exact, "fresh": fresh,
+            "reason": reason, "expect": expect,
         }
 
         with self.gk.critical_section():
