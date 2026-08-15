@@ -36,6 +36,14 @@ Also: the queue had never worked on a real box — tickets were pruned as
 "dead waiters" milliseconds after creation, the detached-lease bug never carried
 over to tickets — and `--no-queue` queued anyway.
 
+**Second review wave.** A re-review found the ticket fix incomplete on the `gozer
+run` path (its ticket looked supervised, so it was still pruned as a dead waiter)
+and settled the design question behind it: *no gozer process ever survives to wait
+on a ticket*, so age is the only rule a ticket can be judged by. It also caught
+`TimeoutError` becoming newly reachable from `status` — a consequence of making the
+reap take the mutex — and two places where the spec still described the old code.
+See `## Known limitations` below for what the reviews found and left standing.
+
 ## Key decisions and why
 
 * **CLI + thin skills**, not logic inside skills. Race-sensitive code belongs in
@@ -75,6 +83,45 @@ over to tickets — and `--no-queue` queued anyway.
   a detached lease immortal instead of merely outliving the one-shot CLI
   invocation that created it. Replaced with an explicit `detached` flag plus
   the 900-second grace window described above.
+
+## Known limitations
+
+Surfaced by the final reviews (2026-08-14) and recorded here rather than left in a
+review transcript. All are known, none is a surprise, and each says what it costs
+and roughly what fixing it would take.
+
+* **`release`'s revalidation narrows the window, it does not close it.** Between
+  the pre-reset check and the reset finishing, a concurrent `reconcile` can
+  legitimately reap the lease and grant the unit to a new tenant — so the reset
+  can still land on that tenant mid-startup. The post-reset check prevents the
+  strictly worse outcome (deleting their lock and opening a claim window on it)
+  but cannot undo a reset. *Closure:* pin the lease under the first critical
+  section — write `state: "releasing"` into the lock — and teach the reap to
+  refuse a unit that is mid-release. Not attempted here: it is a state-format
+  change, and the reap would need a staleness rule for a crashed releaser.
+* **A queued agent loses its place after an hour even while polling correctly.**
+  `since` is stamped at enqueue and never refreshed, and `_send_to_back`
+  preserves it, so a ticket behind a multi-hour lease expires under a caller
+  doing everything right. *Fix:* refresh `since` on each `wait`, or judge age
+  from `requeued_at` when present.
+* **After a reap, nothing ever resets those chips.** The reap has never reset,
+  and `release` now correctly declines to reset a unit it no longer holds, so a
+  crashed workload's silicon goes to the next plain `acquire` un-reset. `--fresh`
+  is correctly protected (it only takes units a real reset marked clean), and the
+  gatekeeper skill now documents the acquire-then-release recipe — but this is
+  the guaranteed outcome of the documented recovery flow, not an edge case.
+* **`mark_clean`/`clear_clean` are best-effort cross-user.** A marker owned by a
+  previous tenant can be neither rewritten nor removed by a different user, so a
+  stale "clean" marker can hand `--fresh` a board that was not reset. *Fix:*
+  per-user marker files, i.e. a state-format change.
+* **`cmd_adopt` claims outside the mutex.** One microscopic hole remains: a
+  malformed lock (no `lease_id`) racing adopt's `mkdir`/`os.replace`.
+* **Exit `12` → `15` is a breaking contract change.** Anything already matching
+  on `12` to mean "device still open" now sees `15`. Nothing in the tool flags
+  this as a migration; the README table is the only notice.
+* **`cmd_release` distinguishes 13 from 15 by substring** (`"not found" in msg`),
+  and `msg` can carry embedded `tt-smi` output. It has not misfired, but the
+  right shape is a structured reason on the return value rather than prose.
 
 ## Open
 
