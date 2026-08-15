@@ -140,6 +140,37 @@ def test_wait_times_out_and_exits_11(env, capsys):
     assert code == 11
 
 
+def test_wait_keeps_the_callers_ticket_and_leaves_no_orphan(env, capsys):
+    """The queue was non-functional on a real box, and this is the proof.
+
+    `gozer acquire` hands back a ticket whose pid is the CLI process that
+    just exited. The first iteration of `gozer wait` called acquire, whose
+    prune dropped that ticket as a dead waiter, and _ticket_for then minted a
+    brand-new one the caller never learned about: `wait` reported the ticket
+    gone, the caller's place in line was lost, and an orphan sat in the queue.
+    """
+    run(["acquire", "--chips", "all", "--who", "hog"], capsys)
+    _, out = run(["acquire", "--chips", "1", "--who", "w", "--json"], capsys)
+    ticket = json.loads(out)["ticket"]
+
+    code, _ = run(["wait", ticket, "--timeout", "1s"], capsys)
+
+    assert code == 11                       # still queued, not "gone" (13)
+    _, q = run(["queue", "--json"], capsys)
+    assert [e["ticket"] for e in json.loads(q)["queue"]] == [ticket]
+
+
+def test_acquire_with_an_unknown_ticket_exits_13(env, capsys):
+    """A ticket that is not in the queue is an error, never a silent new
+    ticket issued under the caller's nose."""
+    run(["acquire", "--chips", "all", "--who", "hog"], capsys)
+    code, _ = run(["acquire", "--chips", "1", "--who", "x",
+                   "--ticket", "nosuch"], capsys)
+    assert code == 13
+    _, q = run(["queue", "--json"], capsys)
+    assert json.loads(q)["queue"] == []
+
+
 def test_status_survives_a_corrupt_since_timestamp(env, capsys):
     """A corrupt state file must not masquerade as "the box is busy".
 

@@ -64,6 +64,52 @@ def test_prune_drops_tickets_whose_process_is_gone(tmp_path, sysfs):
     assert gk.queue_position(alive["ticket"]) == 1
 
 
+def _backdate_ticket(gk, ticket, since):
+    path = gk._ticket_path(ticket)
+    with open(path) as f:
+        rec = json.load(f)
+    rec["since"] = since
+    with open(path, "w") as f:
+        json.dump(rec, f)
+
+
+def test_prune_keeps_a_detached_ticket_whose_recorded_pid_is_gone(tmp_path, sysfs):
+    """The detached-lease bug, in its ticket form.
+
+    A ticket taken by a bare `gozer acquire` records the pid of that one-shot
+    CLI process, which exits immediately. Judging such a ticket by pid
+    liveness deletes it milliseconds after it is issued -- on a real box
+    `gozer wait` came back "no longer queued" about a second later, and the
+    caller's place in line was gone.
+    """
+    gk = make(tmp_path, sysfs, live_pids=(1,))
+    t = gk.enqueue({**req("claude:detached", pid=999), "detached": True})
+    assert gk.prune_queue() == []
+    assert gk.queue_position(t["ticket"]) == 1
+
+
+def test_prune_drops_a_detached_ticket_past_its_max_age(tmp_path, sysfs):
+    """Detached tickets are not immortal either -- they age out, so an
+    abandoned waiter cannot sit at the head of the queue forever."""
+    from gozer.queue import DETACHED_TICKET_MAX_AGE_SECONDS
+    assert DETACHED_TICKET_MAX_AGE_SECONDS > 0
+    gk = make(tmp_path, sysfs, live_pids=(1,))
+    t = gk.enqueue({**req("claude:abandoned", pid=999), "detached": True})
+    _backdate_ticket(gk, t["ticket"], "2000-01-01T00:00:00Z")
+
+    assert gk.prune_queue() == [t["ticket"]]
+    assert gk.queue_position(t["ticket"]) is None
+
+
+def test_prune_still_drops_a_supervised_ticket_whose_process_died(tmp_path, sysfs):
+    """Proves the detached branch narrowed pid-liveness rather than removing
+    it: a `gozer run`-style ticket owns a real process, so its death is still
+    the truth."""
+    gk = make(tmp_path, sysfs, live_pids=(1,))
+    t = gk.enqueue({**req("run:supervised", pid=999), "detached": False})
+    assert gk.prune_queue() == [t["ticket"]]
+
+
 def test_claim_window_entitles_only_the_head(tmp_path, sysfs):
     gk = make(tmp_path, sysfs)
     a = gk.enqueue(req("claude:a"))

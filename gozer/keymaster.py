@@ -24,6 +24,15 @@ from gozer.topology import Chip, all_chips
 DURATION_RE = re.compile(r"^(\d+)([smh]?)$")
 
 
+class TicketNotFound(ValueError):
+    """A `--ticket` was supplied that is not (or no longer) in the queue.
+
+    A ValueError subclass so cli.main's existing catch-all still handles it
+    if a future command forgets to; cli maps it to the "no such lease or
+    ticket" exit code explicitly.
+    """
+
+
 def parse_duration(text: str) -> int:
     """'90s' -> 90, '45m' -> 2700, '2h' -> 7200, bare digits mean minutes."""
     m = DURATION_RE.match((text or "").strip().lower())
@@ -73,6 +82,14 @@ class Keymaster:
         pid = pid if pid is not None else os.getpid()
         total = len(all_chips(self.gk.boards))
         min_chips, max_chips = parse_chip_request(chips_spec, total)
+        # Everything a later `gozer wait` needs to replay this exact request
+        # on the caller's behalf. `detached` decides how the queue judges the
+        # ticket's owner as gone (see queue.DETACHED_TICKET_MAX_AGE_SECONDS):
+        # the same distinction leases already make, for the same reason.
+        request = {
+            "who": who, "pid": pid, "detached": detached,
+            "min_chips": min_chips, "max_chips": max_chips,
+        }
 
         with self.gk.critical_section():
             self.gk.prune_queue()
@@ -80,11 +97,11 @@ class Keymaster:
             # A ticket-holder outside its claim window must wait its turn, and a
             # newcomer must not jump an open window.
             if not self.gk.may_claim(ticket):
-                return self._ticket_for(ticket, who, pid, min_chips, max_chips)
+                return self._ticket_for(ticket, request)
 
             units = self.gk.allocate(min_chips, max_chips, exact=exact, fresh=fresh)
             if units is None:
-                return self._ticket_for(ticket, who, pid, min_chips, max_chips)
+                return self._ticket_for(ticket, request)
 
             chips = [c for u in units for c in self.gk.chips_in_unit(u)]
             chips.sort(key=lambda c: c.dev_index)
@@ -126,7 +143,7 @@ class Keymaster:
                         # anyway, so a rollback can never widen into deleting
                         # a lock that is not this request's.
                         self.gk.release_unit(done, expected_lease_id=lease_id)
-                    return self._ticket_for(ticket, who, pid, min_chips, max_chips)
+                    return self._ticket_for(ticket, request)
 
             # Every unit in the request is claimed now -- only at this point is
             # it safe to clear each one's clean marker. Doing this inside the
@@ -152,16 +169,24 @@ class Keymaster:
                 neighbours=self.gk.eth_neighbours(units),
             )
 
-    def _ticket_for(self, ticket, who, pid, min_chips, max_chips) -> dict:
-        """Reuse an existing ticket if the caller has one, else take a new one."""
+    def _ticket_for(self, ticket: str | None, request: dict) -> dict:
+        """Reuse the caller's existing ticket, or take a new one.
+
+        A caller who supplied a ticket that is not in the queue gets an error,
+        never a replacement. Silently minting a new ticket under the same call
+        was how `gozer wait` lost people's place in line: the caller went on
+        waiting on a ticket id that no longer existed while a fresh, unknown
+        ticket sat at the back of the queue as litter.
+        """
         if ticket:
             for rec in self.gk.queue_entries():
                 if rec.get("ticket") == ticket:
                     return rec
-        return self.gk.enqueue({
-            "who": who, "pid": pid,
-            "min_chips": min_chips, "max_chips": max_chips,
-        })
+            raise TicketNotFound(
+                f"ticket {ticket} is not in the queue -- it was cancelled, "
+                "granted, or abandoned long enough to be pruned; acquire "
+                "again to take a new one")
+        return self.gk.enqueue(request)
 
     # ---- release ----------------------------------------------------------
 

@@ -21,9 +21,30 @@ import secrets
 import time
 
 from gozer import procfd
-from gozer.jsonstore import _atomic_write_json, _read_json, utcnow
+from gozer.jsonstore import (_atomic_write_json, _elapsed_seconds, _read_json,
+                             utcnow)
 
 CLAIM_WINDOW_SECONDS = 90
+
+# A *detached* ticket -- one taken by a bare `gozer acquire` -- has no
+# supervised process behind it, exactly like a detached lease (see
+# gatekeeper.DETACHED_GRACE_SECONDS). Its recorded pid is the one-shot CLI
+# invocation that enqueued it, which exits milliseconds later, so judging it
+# by pid liveness deletes every real ticket almost immediately: on a real box
+# `gozer wait` would return "no longer queued" about a second after
+# `gozer acquire` handed you the ticket, and the caller's place in line would
+# be silently lost. Detached tickets are therefore judged by age instead.
+#
+# An hour is deliberately generous. A queued agent is *expected* to go do
+# other work -- that is the entire point of the ticket -- and `gozer wait`
+# only blocks for 8 minutes at a time, so a patient agent may legitimately be
+# away for several wait-and-work cycles. Dropping a ticket too early loses a
+# real waiter's place in line; dropping it too late costs at most one
+# 90-second claim window that nobody takes, after which the claim-window
+# expiry already sends the ticket to the back of the queue. A ticket created
+# by `gozer run` keeps exact pid semantics: it has a real live process, and
+# its death is the truth.
+DETACHED_TICKET_MAX_AGE_SECONDS = 3600
 
 
 class TicketQueue:
@@ -147,8 +168,28 @@ class TicketQueue:
             if self._claim_window_ticket() == ticket:
                 self._close_claim_window()
 
+    def _is_abandoned(self, rec: dict, now: str) -> bool:
+        """Has this ticket's owner gone away?
+
+        Two kinds of ticket, two answers -- the same split leases already
+        make. A ticket with a supervised process behind it (`gozer run`) is
+        judged by that process's liveness: its death is the truth. A
+        *detached* ticket has no such process, only the pid of the one-shot
+        CLI invocation that enqueued it, which is dead within milliseconds,
+        so it is judged by elapsed time since `since` instead. See
+        DETACHED_TICKET_MAX_AGE_SECONDS.
+        """
+        if rec.get("detached"):
+            since = rec.get("since")
+            # A ticket with no `since` at all is malformed, not fresh: treat
+            # it as maximally old rather than trusting it forever.
+            elapsed = _elapsed_seconds(since, now) if since else float("inf")
+            return elapsed > DETACHED_TICKET_MAX_AGE_SECONDS
+        pid = rec.get("pid")
+        return pid is not None and not procfd.pid_alive(pid, self.proc_root)
+
     def prune(self) -> list[str]:
-        """Drop tickets whose creating process has exited.
+        """Drop tickets whose owner has gone away (see _is_abandoned).
 
         Also sweeps up litter: _send_to_back writes a ticket's new record
         before removing its old one, so a crash mid-move can transiently
@@ -175,9 +216,9 @@ class TicketQueue:
                         os.unlink(stale_path)
 
             dropped = []
+            now = utcnow()
             for rec in self.entries():
-                pid = rec.get("pid")
-                if pid is not None and not procfd.pid_alive(pid, self.proc_root):
+                if self._is_abandoned(rec, now):
                     dropped.append(rec["ticket"])
                     self.dequeue(rec["ticket"])
             return dropped

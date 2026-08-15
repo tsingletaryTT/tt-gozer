@@ -14,7 +14,7 @@ import time
 
 from gozer import __version__, procfd
 from gozer.gatekeeper import Gatekeeper
-from gozer.keymaster import Grant, Keymaster, parse_duration
+from gozer.keymaster import Grant, Keymaster, TicketNotFound, parse_duration
 from gozer.topology import TopologyError
 
 EXIT_OK = 0
@@ -387,6 +387,12 @@ def main(argv: list[str]) -> int:
     except TopologyError as e:
         print(f"gozer: {e}", file=sys.stderr)
         return EXIT_NO_TOPOLOGY
+    except TicketNotFound as e:
+        # Checked before the ValueError arm below (TicketNotFound is one), so
+        # a vanished ticket reports "no such lease or ticket" rather than
+        # "unavailable", which an agent would read as "the box is busy".
+        print(f"gozer: {e}", file=sys.stderr)
+        return EXIT_NO_LEASE
     except ValueError as e:
         print(f"gozer: {e}", file=sys.stderr)
         return EXIT_UNAVAILABLE
