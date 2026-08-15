@@ -65,8 +65,16 @@ class Keymaster:
     def acquire(self, chips_spec: str, who: str, reason: str | None = None,
                 exact: str | None = None, fresh: bool = False,
                 expect: str | None = None, pid: int | None = None,
-                ticket: str | None = None):
-        """Return a Grant, or a queue-ticket dict when nothing is available.
+                ticket: str | None = None, no_queue: bool = False):
+        """Return a Grant, a queue-ticket dict, or None.
+
+        None means "nothing was available and you asked not to be queued"
+        (`--no-queue`). That decision has to be made *here*, before the
+        enqueue: taking a ticket and then having the caller discard it leaves
+        an orphan on disk that nobody is waiting on, and the head of the queue
+        is exactly where an orphan does the most damage -- `release` opens a
+        90-second exclusive claim window for it, which nobody ever claims, so
+        every real acquirer stalls for 90 seconds per release.
 
         A caller that supplies no `pid` is producing a *detached* lease: one
         with no process gozer can supervise (the bare `gozer acquire` CLI
@@ -97,11 +105,11 @@ class Keymaster:
             # A ticket-holder outside its claim window must wait its turn, and a
             # newcomer must not jump an open window.
             if not self.gk.may_claim(ticket):
-                return self._ticket_for(ticket, request)
+                return self._queue_or_refuse(ticket, request, no_queue)
 
             units = self.gk.allocate(min_chips, max_chips, exact=exact, fresh=fresh)
             if units is None:
-                return self._ticket_for(ticket, request)
+                return self._queue_or_refuse(ticket, request, no_queue)
 
             chips = [c for u in units for c in self.gk.chips_in_unit(u)]
             chips.sort(key=lambda c: c.dev_index)
@@ -143,7 +151,7 @@ class Keymaster:
                         # anyway, so a rollback can never widen into deleting
                         # a lock that is not this request's.
                         self.gk.release_unit(done, expected_lease_id=lease_id)
-                    return self._ticket_for(ticket, request)
+                    return self._queue_or_refuse(ticket, request, no_queue)
 
             # Every unit in the request is claimed now -- only at this point is
             # it safe to clear each one's clean marker. Doing this inside the
@@ -168,6 +176,19 @@ class Keymaster:
                 expanded=len(chips) > min_chips,
                 neighbours=self.gk.eth_neighbours(units),
             )
+
+    def _queue_or_refuse(self, ticket: str | None, request: dict,
+                         no_queue: bool) -> dict | None:
+        """Take (or reuse) a ticket -- unless the caller refused to queue.
+
+        The refusal has to happen before the enqueue, not after: a ticket
+        created and then abandoned by its caller is an orphan nobody waits
+        on. See acquire's docstring for what an orphan at the head of the
+        queue costs.
+        """
+        if no_queue:
+            return None
+        return self._ticket_for(ticket, request)
 
     def _ticket_for(self, ticket: str | None, request: dict) -> dict:
         """Reuse the caller's existing ticket, or take a new one.

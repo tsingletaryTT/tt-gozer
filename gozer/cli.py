@@ -125,7 +125,7 @@ def cmd_acquire(args) -> int:
     # the one-shot CLI process that created it.
     result = km.acquire(args.chips, who=args.who, reason=args.reason,
                         exact=args.exact, fresh=args.fresh, expect=args.expect,
-                        ticket=args.ticket)
+                        ticket=args.ticket, no_queue=args.no_queue)
     if isinstance(result, Grant):
         payload = {
             "granted": True, "lease_id": result.lease_id, "units": result.units,
@@ -137,7 +137,9 @@ def cmd_acquire(args) -> int:
         _emit(payload, _render_grant(result, gk), args.json)
         return EXIT_OK
 
-    if args.no_queue:
+    if result is None:
+        # --no-queue: acquire refused *before* taking a ticket, so there is
+        # nothing left on disk to clean up here.
         _emit({"granted": False, "queued": False}, "unavailable: no chips free",
               args.json)
         return EXIT_UNAVAILABLE

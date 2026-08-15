@@ -140,6 +140,21 @@ def test_wait_times_out_and_exits_11(env, capsys):
     assert code == 11
 
 
+def test_no_queue_exits_12_without_leaving_a_ticket_behind(env, capsys):
+    """`--no-queue` used to enqueue anyway: acquire took a ticket, cmd_acquire
+    then printed "unavailable" and returned 12, and the ticket stayed on disk.
+    That orphan becomes the permanent head of the queue, and every `release`
+    then opens a 90-second exclusive claim window for a caller who is not
+    coming back -- stalling every real acquirer for 90 seconds per release."""
+    run(["acquire", "--chips", "all", "--who", "hog"], capsys)
+    code, out = run(["acquire", "--chips", "1", "--who", "x", "--no-queue"],
+                    capsys)
+    assert code == 12
+    assert "unavailable" in out
+    _, q = run(["queue", "--json"], capsys)
+    assert json.loads(q)["queue"] == []
+
+
 def test_wait_keeps_the_callers_ticket_and_leaves_no_orphan(env, capsys):
     """The queue was non-functional on a real box, and this is the proof.
 
