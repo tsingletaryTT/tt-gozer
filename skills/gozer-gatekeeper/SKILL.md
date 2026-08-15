@@ -68,6 +68,24 @@ you, scoped to exactly your chips:
 gozer release <lease-id>
 ```
 
+**With one exception you will hit often.** If the lease's lock is already gone —
+`reconcile` reaps on every `acquire` and `status`, so a crashed or abandoned
+lease is usually reaped before anyone releases it — `release` does bookkeeping
+only and says `not resetting: … no longer locked`. It is not being lazy: those
+chips are free for anyone to take at that moment, so a reset would land on
+whoever grabs them next. Nothing has reset that silicon, and the next plain
+`acquire` gets it un-reset.
+
+To actually reset it, take the unit and give it back:
+
+```bash
+gozer acquire --exact <chip-or-board> --who "human:cleanup" --reason "reset after crash"
+gozer release <new-lease-id>
+```
+
+`--fresh` is safe either way: it only ever hands out units marked clean by a
+release that really did reset them.
+
 If you must reset outside a lease, check two things first:
 
 1. `gozer status` shows nothing `HELD`, `HELD-FOREIGN`, `CLAIMED`, or

@@ -389,8 +389,25 @@ still-queued, so an agent can loop or interleave other work.
 
 When chips free, the head of queue gets a **90-second exclusive claim window**. If it does
 not claim in time its ticket moves to the back, which prevents both a lurker stealing the
-slot and a dead waiter blocking the queue forever. A ticket whose creating process has
-exited is dropped at reconcile.
+slot and a dead waiter blocking the queue forever.
+
+*Amended during implementation.* This section originally read "a ticket whose creating
+process has exited is dropped at reconcile." That is not implementable, because **no gozer
+process ever survives to wait on a ticket**: `acquire` prints its ticket and exits, and
+`run` prints `queued: ticket X` and returns 10 just the same. Every ticket's recorded pid
+is therefore dead within milliseconds, and pruning on liveness deleted tickets that were
+working exactly as intended — `gozer wait` came back "no longer queued" about a second
+after the ticket was issued.
+
+A ticket is instead dropped once it has gone unclaimed for `TICKET_MAX_AGE_SECONDS`
+(**3600**, in `gozer/queue.py`), measured from its `since` stamp. One hour is deliberately
+generous: a queued agent is *expected* to go and do other work, and `wait` only blocks 8
+minutes at a time, so a patient caller may be away for several wait-and-work cycles.
+Dropping too early loses a real waiter's place in line; dropping too late costs at most one
+unclaimed 90-second window, which the claim-window expiry already sends to the back. The
+ticket's `pid` and `detached` fields are recorded for humans reading `queue/*.json`, and are
+not consulted. If a blocking run mode is ever added, that mode — and only that mode — could
+reintroduce a liveness check for its own tickets.
 
 Elastic requests (`1-4`) are satisfied at whatever is available above the minimum, so a
 large request cannot starve behind a stream of small ones — the head of queue is served
@@ -400,12 +417,30 @@ first regardless of size.
 
 1. Verify no fds remain on the leased chips. If any do, refuse (`--force` overrides, with a
    warning) — a lease must not be released out from under live work.
-2. Unless `--no-reset`: run `tt-smi -r <bdf>[,<bdf>]` for exactly the leased chips. Never
-   `reset_m3`.
-3. Mark the board clean, remove the lock directory and lease file.
-4. Notify the queue head by opening its claim window.
+2. **Re-read the gate under the mutex**, then drop the mutex.
+3. Unless `--no-reset`, and only if step 2 says the units are still ours: run
+   `tt-smi -r <bdf>[,<bdf>]` for exactly the leased chips. Never `reset_m3`.
+4. **Re-read the gate under the mutex again.**
+5. Mark the board clean, remove the lock directory and lease file.
+6. Prune the queue, then notify its head by opening a claim window.
 
 `--no-reset` exists for fast handoff between related runs by the same owner.
+
+*Amended during implementation.* Steps 2 and 4 were added because a lease record is not
+proof that the gate still holds it: stale leases get released by hand (the gatekeeper skill
+says to), `reconcile` reaps them automatically, and the `/proc` scan in step 1 takes
+hundreds of milliseconds — long enough for another agent's `acquire` to own the unit before
+step 3 runs. Three outcomes, depending on what the re-read finds:
+
+| Gate says | Release does |
+|---|---|
+| the units are still ours | the full sequence above |
+| a unit now carries a **different** lease | **abort**, touch nothing, exit `15`. Resetting would hit the new tenant mid-startup, and the teardown would delete their lock. |
+| a unit carries **no** lease at all | **skip the reset** — those chips are free for anyone to take, so a reset would land on whoever grabs them next — but still delete our own lease record, and say so. |
+
+The mutex is deliberately **not** held across the reset: `tt-smi -r` takes tens of seconds
+and would block every other user of the box for all of it. That leaves a narrowed but real
+window — see "known limitations" in the project `CLAUDE.md`.
 
 ## Skills and wiring
 
