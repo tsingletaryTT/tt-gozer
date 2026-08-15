@@ -101,11 +101,18 @@ class Keymaster:
         # and `gozer queue` render them, and because they are what a human
         # reading queue/*.json by hand wants to see.
         #
-        # `detached` decides how the queue judges the ticket's owner as gone
-        # (see queue.DETACHED_TICKET_MAX_AGE_SECONDS): the same distinction
-        # leases already make, for the same reason.
+        # `detached` is recorded as True on *every* ticket, whatever the lease
+        # would have been, because a ticket's supervision is a property of the
+        # waiting and nothing waits: `gozer run` prints "queued: ticket X" and
+        # returns 10 exactly like `gozer acquire` does, so its pid is dead
+        # moments later too. Recording it honestly (rather than inheriting the
+        # lease's `detached`) is what stops a `run` ticket being pruned as a
+        # dead waiter one second after the user is told to `gozer wait` on it.
+        # The field is informational -- the queue judges every ticket by age
+        # regardless (queue.TICKET_MAX_AGE_SECONDS) -- but it keeps
+        # queue/*.json honest for anyone reading it by hand.
         request = {
-            "who": who, "pid": pid, "detached": detached,
+            "who": who, "pid": pid, "detached": True,
             "chips_spec": chips_spec,
             "min_chips": min_chips, "max_chips": max_chips,
             "exact": exact, "fresh": fresh,

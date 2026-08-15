@@ -9,6 +9,7 @@ would then fail on. The fact this file runs at all with that one import is
 the decoupling proof, alongside the behavioural assertions below.
 """
 import contextlib
+import json
 import os
 
 import pytest
@@ -16,23 +17,15 @@ import pytest
 from gozer.queue import TicketQueue
 
 
-def _fake_proc(tmp_path, pids):
-    root = tmp_path / "proc"
-    root.mkdir(parents=True, exist_ok=True)
-    for pid in pids:
-        (root / str(pid) / "fd").mkdir(parents=True)
-        (root / str(pid) / "comm").write_text("python\n")
-    return str(root)
+def make_queue(tmp_path, critical_section=contextlib.nullcontext):
+    """A TicketQueue built without any Gatekeeper: a temp dir and a no-op
+    mutex (contextlib.nullcontext is a trivial context-manager factory).
 
-
-def make_queue(tmp_path, critical_section=contextlib.nullcontext, live_pids=(1,)):
-    """A TicketQueue built without any Gatekeeper: temp dir, a no-op mutex
-    (contextlib.nullcontext is a trivial context-manager factory), and a fake
-    proc_root for liveness checks."""
+    Nothing else is needed -- the queue reads no /proc at all, judging every
+    ticket by age (see TICKET_MAX_AGE_SECONDS)."""
     return TicketQueue(
         queue_dir=str(tmp_path / "queue"),
         critical_section=critical_section,
-        proc_root=_fake_proc(tmp_path, live_pids),
     )
 
 
@@ -55,16 +48,22 @@ def test_full_enqueue_position_dequeue_cycle_without_a_gatekeeper(tmp_path):
     assert q.position(b["ticket"]) == 1
 
 
-def test_prune_drops_tickets_whose_process_is_gone(tmp_path):
-    q = make_queue(tmp_path, live_pids=(1,))
-    alive = q.enqueue(req("claude:alive", pid=1))
-    dead = q.enqueue(req("claude:dead", pid=999))
+def test_prune_drops_only_what_has_aged_out(tmp_path):
+    """Age is the only rule: a recorded pid, alive or dead, is irrelevant,
+    because no gozer process survives to wait on a ticket."""
+    q = make_queue(tmp_path)
+    fresh = q.enqueue(req("claude:fresh", pid=999))
+    old = q.enqueue(req("claude:old", pid=1))
+    path = q._ticket_path(old["ticket"])
+    rec = json.load(open(path))
+    rec["since"] = "2000-01-01T00:00:00Z"
+    json.dump(rec, open(path, "w"))
 
     dropped = q.prune()
 
-    assert dropped == [dead["ticket"]]
-    assert [e["who"] for e in q.entries()] == ["claude:alive"]
-    assert q.position(alive["ticket"]) == 1
+    assert dropped == [old["ticket"]]
+    assert [e["who"] for e in q.entries()] == ["claude:fresh"]
+    assert q.position(fresh["ticket"]) == 1
 
 
 class RecordingSection:
@@ -94,7 +93,6 @@ def test_dequeue_is_safe_to_call_standalone_outside_any_critical_section(tmp_pat
     q = TicketQueue(
         queue_dir=str(tmp_path / "queue"),
         critical_section=section,
-        proc_root=_fake_proc(tmp_path, (1,)),
     )
     a = q.enqueue(req("claude:a"))
     q.open_claim_window(a["ticket"])

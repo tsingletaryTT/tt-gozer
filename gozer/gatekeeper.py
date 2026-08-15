@@ -129,7 +129,7 @@ class Gatekeeper:
         # state root and this mutex, so it's composed rather than mixed in:
         # TicketQueue never imports Gatekeeper, only what it needs from it.
         self.queue = TicketQueue(os.path.join(self.root, "queue"),
-                                  self.critical_section, self.proc_root)
+                                  self.critical_section)
 
     # ---- layout -----------------------------------------------------------
 
@@ -670,8 +670,9 @@ class Gatekeeper:
     #
     # All queue behaviour now lives in gozer/queue.py's TicketQueue, composed
     # as self.queue in __init__ (constructed with this gatekeeper's queue
-    # directory, its own reentrant critical_section, and its proc_root). These
-    # are thin one-line forwards so Gatekeeper's public method names --
+    # directory and its own reentrant critical_section -- the queue reads no
+    # /proc at all now, judging tickets purely by age). These are thin
+    # one-line forwards so Gatekeeper's public method names --
     # depended on by tests/test_queue.py and Tasks 8/9 -- keep working
     # unchanged; see TicketQueue for the actual implementation and docstrings.
 

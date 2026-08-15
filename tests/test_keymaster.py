@@ -461,6 +461,34 @@ def test_run_returns_10_when_queued(tmp_path, sysfs):
     assert rc == 10
 
 
+def test_a_ticket_taken_by_run_survives_the_next_prune(tmp_path, sysfs):
+    """B3 survived on the `run` path, and this is where it hurt.
+
+    `run` supplies its own pid, so its ticket was written detached: False --
+    but `run` does not block when it is queued: it prints "queued: ticket X",
+    returns 10, and exits. The pid on that ticket is dead a moment later, so
+    the next prune dropped it and `gozer wait X` -- which the README and the
+    keymaster skill both tell you to run next -- came back exit 13 on a
+    ticket the user had just been handed.
+
+    The fixture's fake /proc contains only pid 1, so this process's own pid
+    (what run() records) is "dead" here exactly as it is on a real box a
+    second after the command returns.
+    """
+    km, gk = make(tmp_path, sysfs)
+    km.acquire("all", who="claude:hog", pid=1)
+
+    rc = km.run([sys.executable, "-c", "pass"], chips_spec="1", who="run:queued")
+
+    assert rc == 10
+    issued = [e["ticket"] for e in gk.queue_entries()]
+    assert len(issued) == 1
+
+    gk.prune_queue()
+
+    assert [e["ticket"] for e in gk.queue_entries()] == issued
+
+
 def test_run_returns_a_nonzero_int_when_popen_itself_fails(tmp_path, sysfs):
     # run()'s contract is "-> int": a bad executable must not raise out of
     # run(), and the lease must still be released by the finally either way.

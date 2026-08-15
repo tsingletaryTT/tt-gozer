@@ -20,20 +20,28 @@ import os
 import secrets
 import time
 
-from gozer import procfd
 from gozer.jsonstore import (_atomic_write_json, _elapsed_seconds, _read_json,
                              utcnow)
 
 CLAIM_WINDOW_SECONDS = 90
 
-# A *detached* ticket -- one taken by a bare `gozer acquire` -- has no
-# supervised process behind it, exactly like a detached lease (see
-# gatekeeper.DETACHED_GRACE_SECONDS). Its recorded pid is the one-shot CLI
-# invocation that enqueued it, which exits milliseconds later, so judging it
-# by pid liveness deletes every real ticket almost immediately: on a real box
-# `gozer wait` would return "no longer queued" about a second after
-# `gozer acquire` handed you the ticket, and the caller's place in line would
-# be silently lost. Detached tickets are therefore judged by age instead.
+# How long a ticket lives without being claimed. Age is the *only* rule, for
+# every ticket, because no gozer process ever survives to wait on one.
+#
+# There is no blocking run mode: `gozer acquire` prints its ticket and exits,
+# and `gozer run` prints `queued: ticket X` and returns 10 just the same. So
+# whatever pid a ticket records -- the one-shot CLI invocation, or the `run`
+# process that supervises a lease it never got -- is dead moments later, and
+# judging a ticket by pid liveness drops it at the very next prune. That is
+# exactly what happened: `gozer wait X` came back "no longer queued" about a
+# second after the ticket was issued, and the caller's place in line was
+# silently lost. It is the same defect the detached *lease* fixed (see
+# gatekeeper.DETACHED_GRACE_SECONDS), and the `run` path kept it alive for
+# one more round because that ticket's pid looked supervised.
+#
+# Ticket supervision is a property of the *waiting*, not of the eventual
+# lease -- and nothing waits. If a blocking run mode is ever added, that mode
+# (and only that mode) can reintroduce a liveness check for its own tickets.
 #
 # An hour is deliberately generous. A queued agent is *expected* to go do
 # other work -- that is the entire point of the ticket -- and `gozer wait`
@@ -41,10 +49,12 @@ CLAIM_WINDOW_SECONDS = 90
 # away for several wait-and-work cycles. Dropping a ticket too early loses a
 # real waiter's place in line; dropping it too late costs at most one
 # 90-second claim window that nobody takes, after which the claim-window
-# expiry already sends the ticket to the back of the queue. A ticket created
-# by `gozer run` keeps exact pid semantics: it has a real live process, and
-# its death is the truth.
-DETACHED_TICKET_MAX_AGE_SECONDS = 3600
+# expiry already sends the ticket to the back of the queue.
+#
+# Known limitation (see the project CLAUDE.md): `since` is stamped at enqueue
+# and never refreshed, so an agent polling correctly behind a multi-hour
+# lease still loses its place at the one-hour mark.
+TICKET_MAX_AGE_SECONDS = 3600
 
 
 class TicketQueue:
@@ -55,7 +65,7 @@ class TicketQueue:
     # undetected collision would silently operate on the wrong ticket.
     _TICKET_COLLISION_RETRIES = 20
 
-    def __init__(self, queue_dir: str, critical_section, proc_root: str = "/proc"):
+    def __init__(self, queue_dir: str, critical_section):
         """
         queue_dir: the directory holding ticket files (Gatekeeper's
             `<root>/queue`; ensured to exist by Gatekeeper._ensure_dirs, which
@@ -66,12 +76,14 @@ class TicketQueue:
             manager, serialising mutation. Gatekeeper passes its own
             (reentrant) `critical_section` bound method, so the queue's
             locking is the same lock the rest of the gatekeeper uses.
-        proc_root: passed straight to procfd.pid_alive for prune()'s
-            liveness checks; overridable in tests, "/proc" in production.
+
+        No `proc_root`: nothing in the queue reads /proc any more. It used to
+        be here for prune()'s pid-liveness check, which is gone (see
+        TICKET_MAX_AGE_SECONDS) -- and a parameter kept past its last reader
+        is the same defect as a flag that is accepted and never read.
         """
         self.queue_dir = queue_dir
         self._critical_section = critical_section
-        self.proc_root = proc_root
         os.makedirs(self.queue_dir, exist_ok=True)
 
     # ---- internal path helpers --------------------------------------------
@@ -169,27 +181,23 @@ class TicketQueue:
                 self._close_claim_window()
 
     def _is_abandoned(self, rec: dict, now: str) -> bool:
-        """Has this ticket's owner gone away?
+        """Has this ticket been left behind? Judged by age, and only by age.
 
-        Two kinds of ticket, two answers -- the same split leases already
-        make. A ticket with a supervised process behind it (`gozer run`) is
-        judged by that process's liveness: its death is the truth. A
-        *detached* ticket has no such process, only the pid of the one-shot
-        CLI invocation that enqueued it, which is dead within milliseconds,
-        so it is judged by elapsed time since `since` instead. See
-        DETACHED_TICKET_MAX_AGE_SECONDS.
+        Deliberately does *not* consult the ticket's `pid`, or its `detached`
+        flag. No gozer process survives to wait on a ticket -- neither
+        `acquire` nor `run` blocks -- so every recorded pid is dead moments
+        after the ticket is written, and a liveness check deletes tickets
+        that are working exactly as intended. See TICKET_MAX_AGE_SECONDS for
+        the full reasoning and for what a future blocking mode would need.
         """
-        if rec.get("detached"):
-            since = rec.get("since")
-            # A ticket with no `since` at all is malformed, not fresh: treat
-            # it as maximally old rather than trusting it forever.
-            elapsed = _elapsed_seconds(since, now) if since else float("inf")
-            return elapsed > DETACHED_TICKET_MAX_AGE_SECONDS
-        pid = rec.get("pid")
-        return pid is not None and not procfd.pid_alive(pid, self.proc_root)
+        since = rec.get("since")
+        # A ticket with no `since` at all is malformed, not fresh: treat it
+        # as maximally old rather than trusting it forever.
+        elapsed = _elapsed_seconds(since, now) if since else float("inf")
+        return elapsed > TICKET_MAX_AGE_SECONDS
 
     def prune(self) -> list[str]:
-        """Drop tickets whose owner has gone away (see _is_abandoned).
+        """Drop tickets that have aged out (see _is_abandoned).
 
         Also sweeps up litter: _send_to_back writes a ticket's new record
         before removing its old one, so a crash mid-move can transiently

@@ -54,14 +54,21 @@ def test_dequeue_removes_and_renumbers_positions(tmp_path, sysfs):
     assert gk.queue_position(a["ticket"]) is None
 
 
-def test_prune_drops_tickets_whose_process_is_gone(tmp_path, sysfs):
+def test_prune_ignores_pids_entirely(tmp_path, sysfs):
+    """Ticket liveness is not a pid question, and never was answerable as one.
+
+    No gozer process survives to wait on a ticket -- `acquire` and `run` both
+    print a ticket and exit -- so every recorded pid is dead moments later.
+    Pruning on that dropped tickets that were working exactly as intended,
+    which is why age is now the only rule.
+    """
     gk = make(tmp_path, sysfs, live_pids=(1,))
     alive = gk.enqueue(req("claude:alive", pid=1))
     dead = gk.enqueue(req("claude:dead", pid=999))
-    dropped = gk.prune_queue()
-    assert dropped == [dead["ticket"]]
-    assert [e["who"] for e in gk.queue_entries()] == ["claude:alive"]
+    assert gk.prune_queue() == []
+    assert [e["who"] for e in gk.queue_entries()] == ["claude:alive", "claude:dead"]
     assert gk.queue_position(alive["ticket"]) == 1
+    assert gk.queue_position(dead["ticket"]) == 2
 
 
 def _backdate_ticket(gk, ticket, since):
@@ -73,14 +80,13 @@ def _backdate_ticket(gk, ticket, since):
         json.dump(rec, f)
 
 
-def test_prune_keeps_a_detached_ticket_whose_recorded_pid_is_gone(tmp_path, sysfs):
+def test_prune_keeps_a_ticket_whose_recorded_pid_is_gone(tmp_path, sysfs):
     """The detached-lease bug, in its ticket form.
 
-    A ticket taken by a bare `gozer acquire` records the pid of that one-shot
-    CLI process, which exits immediately. Judging such a ticket by pid
-    liveness deletes it milliseconds after it is issued -- on a real box
-    `gozer wait` came back "no longer queued" about a second later, and the
-    caller's place in line was gone.
+    A ticket records the pid of the one-shot CLI process that took it, which
+    exits immediately. Judging it by pid liveness deletes it milliseconds
+    after it is issued -- on a real box `gozer wait` came back "no longer
+    queued" about a second later, and the caller's place in line was gone.
     """
     gk = make(tmp_path, sysfs, live_pids=(1,))
     t = gk.enqueue({**req("claude:detached", pid=999), "detached": True})
@@ -88,11 +94,11 @@ def test_prune_keeps_a_detached_ticket_whose_recorded_pid_is_gone(tmp_path, sysf
     assert gk.queue_position(t["ticket"]) == 1
 
 
-def test_prune_drops_a_detached_ticket_past_its_max_age(tmp_path, sysfs):
-    """Detached tickets are not immortal either -- they age out, so an
-    abandoned waiter cannot sit at the head of the queue forever."""
-    from gozer.queue import DETACHED_TICKET_MAX_AGE_SECONDS
-    assert DETACHED_TICKET_MAX_AGE_SECONDS > 0
+def test_prune_drops_a_ticket_past_its_max_age(tmp_path, sysfs):
+    """Tickets are not immortal either -- they age out, so an abandoned
+    waiter cannot sit at the head of the queue forever."""
+    from gozer.queue import TICKET_MAX_AGE_SECONDS
+    assert TICKET_MAX_AGE_SECONDS > 0
     gk = make(tmp_path, sysfs, live_pids=(1,))
     t = gk.enqueue({**req("claude:abandoned", pid=999), "detached": True})
     _backdate_ticket(gk, t["ticket"], "2000-01-01T00:00:00Z")
@@ -101,13 +107,17 @@ def test_prune_drops_a_detached_ticket_past_its_max_age(tmp_path, sysfs):
     assert gk.queue_position(t["ticket"]) is None
 
 
-def test_prune_still_drops_a_supervised_ticket_whose_process_died(tmp_path, sysfs):
-    """Proves the detached branch narrowed pid-liveness rather than removing
-    it: a `gozer run`-style ticket owns a real process, so its death is still
-    the truth."""
+def test_a_supervised_looking_ticket_ages_out_like_any_other(tmp_path, sysfs):
+    """`detached: False` on a ticket buys it nothing -- neither immortality
+    nor an early death. A `gozer run` ticket is written by a process that
+    returns 10 and exits, so it gets exactly the same age rule."""
     gk = make(tmp_path, sysfs, live_pids=(1,))
-    t = gk.enqueue({**req("run:supervised", pid=999), "detached": False})
-    assert gk.prune_queue() == [t["ticket"]]
+    fresh = gk.enqueue({**req("run:supervised", pid=999), "detached": False})
+    old = gk.enqueue({**req("run:forgotten", pid=999), "detached": False})
+    _backdate_ticket(gk, old["ticket"], "2000-01-01T00:00:00Z")
+
+    assert gk.prune_queue() == [old["ticket"]]
+    assert gk.queue_position(fresh["ticket"]) == 1
 
 
 def test_claim_window_entitles_only_the_head(tmp_path, sysfs):
