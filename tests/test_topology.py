@@ -53,6 +53,33 @@ def test_unreadable_tree_raises(tmp_path):
         os.chmod(root, 0o755)
 
 
+def test_empty_tt_serial_raises_instead_of_flipping_the_grain(sysfs):
+    """An unreadable board serial must be fatal, not a silent downgrade.
+
+    _read_attr returns "" on any OSError, so a chip whose tt_serial cannot be
+    read used to be grouped into a single board keyed "" -- which makes
+    lease_grain() see one 4-chip board and return "chip". gozer would then
+    lease half a p300c while UMD still hands the tenant the whole board: the
+    unenforceable lease the README promises never happens.
+    """
+    chips = [dict(c) for c in QUIETBOX]
+    chips[0]["serial"] = ""
+    with pytest.raises(TopologyError) as excinfo:
+        read_topology(sysfs(chips))
+    assert "tt_serial" in str(excinfo.value)
+    assert chips[0]["bdf"] in str(excinfo.value)
+
+
+def test_missing_tt_serial_file_raises(sysfs, tmp_path):
+    """Same guard, reached the other way: the attribute file is absent
+    entirely rather than empty."""
+    import os
+    root = sysfs(QUIETBOX)
+    os.unlink(os.path.join(root, "tenstorrent!1", "tt_serial"))
+    with pytest.raises(TopologyError):
+        read_topology(root)
+
+
 def test_env_var_gozer_sysfs_root(sysfs, monkeypatch):
     path = sysfs(QUIETBOX)
     monkeypatch.setenv("GOZER_SYSFS_ROOT", path)

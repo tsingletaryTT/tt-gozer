@@ -91,6 +91,23 @@ def read_topology(sysfs_root: str | None = None) -> list[Board]:
     if not chips:
         raise TopologyError(f"no Tenstorrent devices found under {root}")
 
+    # tt_serial is the one attribute the whole allocation model rests on: it
+    # groups chips into boards, and the board sizes are what lease_grain reads
+    # to decide board-vs-chip grain. _read_attr swallows OSError and returns
+    # "" -- correct for tt_aiclk and friends, where a missing value costs
+    # nothing but a blank in a display -- but here it would group every chip
+    # into a single board with serial "", flip the grain to "chip", and have
+    # gozer hand out half a p300c while UMD still gives the tenant both chips.
+    # That is precisely the unenforceable lease the README promises never
+    # happens, so refuse (exit 14) rather than degrade into it.
+    unreadable = [c.bdf for c in chips if not c.serial]
+    if unreadable:
+        raise TopologyError(
+            f"unreadable tt_serial for {', '.join(sorted(unreadable))} under "
+            f"{root} -- board serials are what determine the lease grain, so "
+            "gozer cannot safely decide what to hand out; check the driver "
+            "(tt-kmd) and permissions on these sysfs attributes")
+
     by_serial: dict[str, list[Chip]] = {}
     for c in chips:
         by_serial.setdefault(c.serial, []).append(c)
