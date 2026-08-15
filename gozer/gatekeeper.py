@@ -527,9 +527,32 @@ class Gatekeeper:
         return os.path.join(self.root, "gate", f"{unit_key}.clean")
 
     def mark_clean(self, unit_key: str) -> None:
-        """Record that this unit has been reset since its last release."""
-        with open(self._clean_marker(unit_key), "w") as f:
-            f.write(utcnow() + "\n")
+        """Record that this unit has been reset since its last release.
+
+        Written temp-and-replace, and never allowed to raise. Both matter
+        because this is called from the middle of `release`, *after* the
+        reset has already run: a bare open(..., "w") that fails there aborts
+        a release whose destructive step is already done. Cross-user that
+        failure is routine rather than exotic -- gate/ is sticky and the
+        marker may still be owned by the previous tenant, so opening it for
+        writing raises EACCES.
+
+        The marker is best-effort bookkeeping: losing a write costs at most
+        an unnecessary future reset (the unit simply is not offered to
+        `--fresh`), never correctness. A cross-user *stale* marker is the
+        pre-existing limitation on the other side of the same permission
+        problem -- clear_clean's unlink is equally unable to remove another
+        user's file, and equally suppressed.
+        """
+        path = self._clean_marker(unit_key)
+        tmp = f"{path}.tmp.{os.getpid()}"
+        try:
+            with open(tmp, "w") as f:
+                f.write(utcnow() + "\n")
+            os.replace(tmp, path)
+        except OSError:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp)
 
     def clear_clean(self, unit_key: str) -> None:
         with contextlib.suppress(OSError):

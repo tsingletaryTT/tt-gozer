@@ -233,6 +233,45 @@ def test_status_survives_a_corrupt_since_timestamp(env, capsys):
     assert "FREE" in out
 
 
+def test_release_while_a_device_is_open_has_its_own_exit_code(env, capsys, tmp_path):
+    """Refusing to release is not the same as "no chips are free".
+
+    Both used to be exit 12, so an agent told to stop its own workload read
+    it as "the box is busy, go wait" instead.
+    """
+    _, out = run(["acquire", "--chips", "1", "--who", "x", "--json"], capsys)
+    grant = json.loads(out)
+    os.symlink(f"/dev/tenstorrent/{grant['dev_indices'][0]}",
+               tmp_path / "proc" / "1" / "fd" / "9")
+
+    code, out = run(["release", grant["lease_id"]], capsys)
+
+    assert code == 15
+    assert "still open" in out
+
+
+def test_topology_no_longer_accepts_a_refresh_flag(env, capsys):
+    """There is no topology cache, so --refresh was a placebo -- accepted,
+    never read. Argparse must now reject it rather than pretend."""
+    with pytest.raises(SystemExit):
+        main(["topology", "--refresh"])
+
+
+def test_run_returns_130_when_interrupted_with_no_child(env, capsys, monkeypatch):
+    """km.run's signal forwarder raises KeyboardInterrupt when a signal
+    arrives with no live child to forward it to -- by design, so the lease is
+    released on the way out. cmd_run must turn that into the conventional
+    128+SIGINT exit code, not let a traceback out of a `-> int` contract."""
+    from gozer import keymaster
+
+    def interrupted_run(*a, **kw):
+        raise KeyboardInterrupt("signal 15 received with no live child")
+
+    monkeypatch.setattr(keymaster.Keymaster, "run", interrupted_run)
+    code, _ = run(["run", "--chips", "1", "--", "/bin/true"], capsys)
+    assert code == 130
+
+
 def test_unreadable_topology_exits_14(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("GOZER_ROOT", str(tmp_path / "state"))
     monkeypatch.setenv("GOZER_SYSFS_ROOT", str(tmp_path / "nothing"))

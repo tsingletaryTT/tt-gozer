@@ -138,6 +138,32 @@ def test_no_expansion_note_at_chip_grain(tmp_path, sysfs):
     assert grant.expanded is False
 
 
+def test_a_satisfied_elastic_request_is_not_reported_as_expanded(tmp_path, sysfs):
+    """`--chips 1-3` granted 2 chips got exactly what it asked for.
+
+    `expanded` compared the grant against the request's *minimum*, so any
+    elastic request that got more than its floor printed "asked for 1 -- UMD
+    expands TT_VISIBLE_DEVICES to the whole board" -- teaching an agent
+    something false about a grant that was simply inside its own range.
+    """
+    km, gk = make(tmp_path, sysfs)
+    # 1-3 rather than 1-4: allocate stops adding units once the next one
+    # would overshoot the maximum, so this grants exactly one 2-chip board --
+    # more than the minimum, still inside the range.
+    grant = km.acquire("1-3", who="claude:test", pid=1)
+    assert len(grant.bdfs) == 2      # a whole board, well inside 1-3
+    assert grant.expanded is False
+
+
+def test_expansion_is_still_reported_when_the_grain_overshoots(tmp_path, sysfs):
+    """The other side of the same comparison: `--chips 1` on a 2-chip board
+    really did get more than it could ask for, and must say so."""
+    km, gk = make(tmp_path, sysfs)
+    grant = km.acquire("1", who="claude:test", pid=1)
+    assert len(grant.bdfs) == 2
+    assert grant.expanded is True
+
+
 def test_env_emits_comma_separated_bdfs(tmp_path, sysfs):
     km, gk = make(tmp_path, sysfs)
     grant = km.acquire("1", who="claude:test", pid=1)

@@ -101,6 +101,8 @@ carry the outcome, so no output parsing is required:
 | `12` | unavailable and queueing disabled |
 | `13` | no such lease or ticket |
 | `14` | topology unreadable |
+| `15` | release refused, nothing done — a device is still open, or the lease's units now belong to someone else |
+| `130` | `gozer run` interrupted by a signal (128 + SIGINT); the lease was released |
 
 Waiting is designed around agents: `acquire` never blocks, so an agent gets a ticket and can
 go do other work. `gozer wait <ticket>` blocks for a bounded 8 minutes — deliberately under

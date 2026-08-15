@@ -23,6 +23,13 @@ EXIT_WAIT_TIMEOUT = 11
 EXIT_UNAVAILABLE = 12
 EXIT_NO_LEASE = 13
 EXIT_NO_TOPOLOGY = 14
+# Release refused and did nothing: a device is still open, or the units have
+# moved on to another lease. Distinct from 12, which means "no chips for you
+# right now" -- overloading that told an agent to go wait for hardware when
+# what it actually needed was to stop its own workload first.
+EXIT_RELEASE_REFUSED = 15
+# Conventional 128 + SIGINT, for `gozer run` interrupted by a signal.
+EXIT_INTERRUPTED = 130
 
 
 def _make(args) -> tuple[Gatekeeper, Keymaster]:
@@ -239,7 +246,9 @@ def cmd_release(args) -> int:
     _emit({"released": ok, "message": msg}, msg, args.json)
     if ok:
         return EXIT_OK
-    return EXIT_NO_LEASE if "not found" in msg else EXIT_UNAVAILABLE
+    # Two failure shapes, two codes: there is no such lease (13), or the
+    # release was refused and nothing was done (15).
+    return EXIT_NO_LEASE if "not found" in msg else EXIT_RELEASE_REFUSED
 
 
 def cmd_reconcile(args) -> int:
@@ -310,9 +319,18 @@ def cmd_run(args) -> int:
     if not args.command:
         print("nothing to run: put the command after --", file=sys.stderr)
         return EXIT_UNAVAILABLE
-    return km.run(args.command, chips_spec=args.chips, who=args.who,
-                  reason=args.reason, exact=args.exact, fresh=args.fresh,
-                  expect=args.expect)
+    try:
+        return km.run(args.command, chips_spec=args.chips, who=args.who,
+                      reason=args.reason, exact=args.exact, fresh=args.fresh,
+                      expect=args.expect)
+    except KeyboardInterrupt:
+        # run()'s signal forwarder deliberately raises when a signal arrives
+        # with no live child to forward it to, so control unwinds through the
+        # try/finally that releases the lease. By the time it reaches here the
+        # lease is already released; all that is left is to honour run()'s
+        # `-> int` contract instead of letting a traceback out of the CLI.
+        print("gozer run: interrupted", file=sys.stderr)
+        return EXIT_INTERRUPTED
 
 
 # ---- parser ---------------------------------------------------------------
@@ -332,8 +350,11 @@ def build_parser() -> argparse.ArgumentParser:
         return sp
 
     add("status", cmd_status, "who holds what, and who is waiting")
-    t = add("topology", cmd_topology, "chips, boards, and the lease grain")
-    t.add_argument("--refresh", action="store_true", help="ignore the cache")
+    # No --refresh: there is no topology cache to bypass (sysfs is read once
+    # per process, which is already the freshest thing available). A flag
+    # that is accepted and never read is the same defect as the old --sudo
+    # placebo, so it is not offered.
+    add("topology", cmd_topology, "chips, boards, and the lease grain")
 
     for name, aliases in (("acquire", ("summon",)),):
         a = add(name, cmd_acquire, "take a lease on chips", aliases=aliases)

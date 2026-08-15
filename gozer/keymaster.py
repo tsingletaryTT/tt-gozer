@@ -186,7 +186,15 @@ class Keymaster:
                 bdfs=[c.bdf for c in chips],
                 dev_indices=[c.dev_index for c in chips],
                 requested=min_chips,
-                expanded=len(chips) > min_chips,
+                # "Expanded" means the grain forced more chips on the caller
+                # than they could possibly have wanted -- the UMD
+                # board-expansion note. Comparing against the *minimum* made
+                # every satisfied elastic request look expanded: `--chips 1-4`
+                # granted 2 chips would print "asked for 1 -- UMD expands
+                # TT_VISIBLE_DEVICES to the whole board", which is simply
+                # false; 2 is inside what was asked for. The maximum is the
+                # boundary that matters.
+                expanded=len(chips) > max_chips,
                 neighbours=self.gk.eth_neighbours(units),
             )
 

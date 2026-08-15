@@ -285,7 +285,7 @@ granted: chips 2,3  (board 0000000000000001, p300c)
 
 ```
 gozer status [--json] [--watch]
-gozer topology [--refresh] [--json]
+gozer topology [--json]
 gozer acquire --chips N|all|LO-HI [--exact T] [--who W] [--reason R]
               [--expect DURATION] [--fresh] [--json]
 gozer wait <ticket> [--timeout 8m] [--json]
@@ -309,6 +309,13 @@ the lease cannot leak.
 Exit codes: `0` granted/success · `10` queued (ticket on stdout) · `11` wait timed out,
 still queued · `12` unavailable and queueing disabled · `13` lease not found or not owned ·
 `14` topology unreadable.
+
+*Amended during implementation:* `--refresh` is gone from `topology` — there is no topology
+cache to bypass, and a flag that is accepted and never read is a placebo. Two codes were
+added: `15` release refused and nothing done (a device is still open, or the lease's units
+now belong to another lease) — previously overloaded onto `12`, which told an agent to wait
+for hardware when it needed to stop its own workload — and `130` for `gozer run` interrupted
+by a signal, the conventional 128 + SIGINT.
 
 ## Reconciliation — fd truth over bookkeeping
 
