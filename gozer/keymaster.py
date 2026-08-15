@@ -189,8 +189,8 @@ class Keymaster:
                 # "Expanded" means the grain forced more chips on the caller
                 # than they could possibly have wanted -- the UMD
                 # board-expansion note. Comparing against the *minimum* made
-                # every satisfied elastic request look expanded: `--chips 1-4`
-                # granted 2 chips would print "asked for 1 -- UMD expands
+                # every satisfied elastic request look expanded: `--chips 1-3`
+                # granted one 2-chip board would print "asked for 1 -- UMD expands
                 # TT_VISIBLE_DEVICES to the whole board", which is simply
                 # false; 2 is inside what was asked for. The maximum is the
                 # boundary that matters.
