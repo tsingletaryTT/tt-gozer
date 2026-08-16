@@ -133,6 +133,24 @@ def test_adopt_wraps_a_lease_around_untracked_work(env, capsys, tmp_path):
     assert states[0] == "HELD" and states[1] == "HELD"
 
 
+def test_adopt_logs_an_adopted_event_to_history(env, capsys, tmp_path):
+    from gozer import history
+    from gozer.gatekeeper import Gatekeeper
+    fd = tmp_path / "proc" / "1" / "fd"
+    os.symlink("/dev/tenstorrent/0", fd / "3")
+    os.symlink("/dev/tenstorrent/1", fd / "4")
+
+    code, _ = run(["adopt", "0", "--who", "manual:vllm"], capsys)
+    assert code == 0
+
+    gk = Gatekeeper()
+    records = [r for r in history.read(gk.root) if r["event"] == "adopted"]
+    assert len(records) == 1
+    assert records[0]["who"] == "manual:vllm"
+    assert records[0]["pids"] == [1]
+    assert sorted(records[0]["chips"]) == ["0000:01:00.0", "0000:02:00.0"]
+
+
 def test_wait_times_out_and_exits_11(env, capsys):
     run(["acquire", "--chips", "all", "--who", "hog"], capsys)
     _, out = run(["acquire", "--chips", "1", "--who", "w", "--json"], capsys)
@@ -485,3 +503,46 @@ def test_reconcile_then_removes_the_stale_lease_status_left_behind(env, capsys):
     assert code == 0
     assert gk.unit_lease("0000000000000002") is None
     assert gk.read_lease("deadpid") is None
+
+
+def test_history_command_defaults_to_the_last_20_events_human_readable(env, capsys):
+    # Only 2 boards exist, so most of these queue rather than grant -- doesn't
+    # matter here, every acquire logs *something* (granted or queued).
+    for i in range(25):
+        run(["acquire", "--chips", "1", "--who", f"claude:{i}", "--json"], capsys)
+
+    code, out = run(["history"], capsys)
+    assert code == 0
+    lines = [l for l in out.splitlines() if l.strip()]
+    # Capped at 20 -- exact framing (headers, blank lines) is not pinned here.
+    assert len(lines) <= 20
+    assert "queued" in out or "granted" in out
+
+
+def test_history_json_emits_raw_records(env, capsys):
+    run(["acquire", "--chips", "1", "--who", "claude:x", "--json"], capsys)
+
+    code, out = run(["history", "--json"], capsys)
+    assert code == 0
+    data = json.loads(out)
+    assert "history" in data
+    assert any(r["event"] == "granted" and r["who"] == "claude:x"
+              for r in data["history"])
+
+
+def test_history_dash_n_limits_the_count(env, capsys):
+    run(["acquire", "--chips", "1", "--who", "claude:a", "--json"], capsys)
+    run(["acquire", "--chips", "1", "--who", "claude:b", "--json"], capsys)
+
+    code, out = run(["history", "-n", "1", "--json"], capsys)
+    assert code == 0
+    assert len(json.loads(out)["history"]) == 1
+
+
+def test_history_is_newest_last(env, capsys):
+    run(["acquire", "--chips", "1", "--who", "claude:a", "--json"], capsys)
+    run(["acquire", "--chips", "1", "--who", "claude:b", "--json"], capsys)
+
+    code, out = run(["history", "--json"], capsys)
+    events = json.loads(out)["history"]
+    assert events[-1]["who"] == "claude:b"

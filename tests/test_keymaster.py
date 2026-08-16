@@ -112,6 +112,46 @@ def test_third_acquire_is_queued_with_a_ticket(tmp_path, sysfs):
     assert gk.queue_position(queued["ticket"]) == 1
 
 
+def test_acquire_logs_a_granted_event_to_history(tmp_path, sysfs):
+    """The founding requirement -- who holds the device is legible -- only
+    held in the present tense: once a lease is released or reaped every
+    trace vanished. history.jsonl is the append-only record that survives."""
+    from gozer import history
+    km, gk = make(tmp_path, sysfs)
+    grant = km.acquire("1", who="claude:test", reason="unit test", pid=1)
+
+    records = history.read(gk.root)
+    granted = [r for r in records if r["event"] == "granted"]
+    assert len(granted) == 1
+    rec = granted[0]
+    assert rec["lease_id"] == grant.lease_id
+    assert rec["who"] == "claude:test"
+    assert rec["reason"] == "unit test"
+    assert sorted(rec["chips"]) == sorted(grant.bdfs)
+    assert rec["dev_indices"] == grant.dev_indices
+    assert rec["units"] == grant.units
+    assert rec["detached"] is False
+    assert rec["pid"] == 1
+    assert rec["expanded"] == grant.expanded
+    assert rec["requested"] == grant.requested
+    assert rec["ts"].endswith("Z")
+
+
+def test_queued_acquire_logs_a_queued_event_to_history(tmp_path, sysfs):
+    from gozer import history
+    km, gk = make(tmp_path, sysfs)
+    km.acquire("all", who="claude:hog", pid=1)
+    queued = km.acquire("1", who="claude:waiter", pid=1)
+
+    records = history.read(gk.root)
+    q = [r for r in records if r["event"] == "queued"]
+    assert len(q) == 1
+    assert q[0]["ticket"] == queued["ticket"]
+    assert q[0]["who"] == "claude:waiter"
+    assert q[0]["min_chips"] == 1
+    assert q[0]["max_chips"] == 1
+
+
 def test_acquire_clears_the_clean_marker_on_the_granted_unit(tmp_path, sysfs):
     # clear_clean has no other test yet -- acquire() is its first real caller.
     # Prove it is actually invoked: mark a unit clean via a prior release,
@@ -195,6 +235,89 @@ def test_release_frees_the_unit_and_resets(tmp_path, sysfs):
     assert gk.read_lease(grant.lease_id) is None
     assert calls and calls[0][1] == "-r"
     assert set(calls[0][2].split(",")) == set(grant.bdfs)
+
+
+def test_release_logs_a_released_event_to_history(tmp_path, sysfs):
+    from gozer import history
+    km, gk = make(tmp_path, sysfs)
+    km.reset_runner = lambda argv, **kw: _Ok()
+    grant = km.acquire("1", who="claude:test", pid=1)
+    km.release(grant.lease_id)
+
+    records = history.read(gk.root)
+    released = [r for r in records if r["event"] == "released"]
+    assert len(released) == 1
+    rec = released[0]
+    assert rec["lease_id"] == grant.lease_id
+    assert rec["who"] == "claude:test"
+    assert sorted(rec["chips"]) == sorted(grant.bdfs)
+    assert isinstance(rec["duration_s"], (int, float))
+    assert rec["duration_s"] >= 0
+    assert rec["reset_ran"] is True
+    assert rec["reset_ok"] is True
+
+
+def test_release_of_a_failed_reset_logs_reset_ok_false(tmp_path, sysfs):
+    from gozer import history
+    km, gk = make(tmp_path, sysfs)
+    km.reset_runner = lambda argv, **kw: _Fail()
+    grant = km.acquire("1", who="claude:test", pid=1)
+    km.release(grant.lease_id)
+
+    released = [r for r in history.read(gk.root) if r["event"] == "released"]
+    assert released[0]["reset_ran"] is True
+    assert released[0]["reset_ok"] is False
+
+
+def test_release_with_no_reset_logs_reset_ran_false(tmp_path, sysfs):
+    from gozer import history
+    km, gk = make(tmp_path, sysfs)
+    grant = km.acquire("1", who="claude:test", pid=1)
+    km.release(grant.lease_id, no_reset=True)
+
+    released = [r for r in history.read(gk.root) if r["event"] == "released"]
+    assert released[0]["reset_ran"] is False
+
+
+def test_release_refused_for_open_fd_logs_a_refused_event(tmp_path, sysfs):
+    from gozer import history
+    km, gk = make(tmp_path, sysfs)
+    grant = km.acquire("1", who="claude:test", pid=1)
+    fd_dir = os.path.join(gk.proc_root, "1", "fd")
+    os.symlink(f"/dev/tenstorrent/{grant.dev_indices[0]}", os.path.join(fd_dir, "9"))
+
+    ok, msg = km.release(grant.lease_id)
+    assert ok is False
+
+    refused = [r for r in history.read(gk.root) if r["event"] == "refused"]
+    assert len(refused) == 1
+    assert refused[0]["lease_id"] == grant.lease_id
+    assert "open" in refused[0]["reason"].lower()
+
+
+def test_release_refused_for_foreign_unit_logs_a_refused_event(tmp_path, sysfs,
+                                                                monkeypatch):
+    """Companion to test_release_never_resets_chips_that_now_belong_to_someone_else:
+    that same refusal must also be legible after the fact, in history."""
+    from gozer import history
+    from gozer import keymaster as keymaster_mod
+    km, gk = make(tmp_path, sysfs)
+    grant = km.acquire("1", who="claude:stale", pid=1)
+    unit = grant.units[0]
+
+    def stealing_holders(proc_root, **kw):
+        gk.release_unit(unit)
+        gk.claim_unit(unit, {"lease_id": "newtenant", "who": "claude:b"})
+        return {}
+
+    monkeypatch.setattr(keymaster_mod.procfd, "holders", stealing_holders)
+    ok, msg = km.release(grant.lease_id)
+    assert ok is False
+
+    refused = [r for r in history.read(gk.root) if r["event"] == "refused"]
+    assert len(refused) == 1
+    assert refused[0]["lease_id"] == grant.lease_id
+    assert "another" in refused[0]["reason"].lower() or "belong" in refused[0]["reason"].lower()
 
 
 def test_release_marks_the_unit_clean_for_fresh_requests(tmp_path, sysfs):

@@ -12,7 +12,7 @@ import os
 import sys
 import time
 
-from gozer import __version__, procfd
+from gozer import __version__, history, procfd
 from gozer.gatekeeper import Gatekeeper
 from gozer.keymaster import Grant, Keymaster, TicketNotFound, parse_duration
 from gozer.topology import TopologyError
@@ -331,6 +331,8 @@ def cmd_adopt(args) -> int:
         _emit({"adopted": False}, f"{target} is already leased", args.json)
         return EXIT_UNAVAILABLE
     gk.write_lease(lease)
+    history.log(gk.root, "adopted", lease_id=lease_id, who=args.who,
+               chips=lease["chips"], pids=pids)
     _emit({"adopted": True, "lease_id": lease_id, "pids": pids},
           f"adopted {target} for {args.who} (pid {pids[0]}), lease {lease_id}",
           args.json)
@@ -345,6 +347,28 @@ def cmd_env(args) -> int:
         return EXIT_NO_LEASE
     env = km.env_for(lease)
     _emit(env, "\n".join(f"export {k}={v}" for k, v in env.items()), args.json)
+    return EXIT_OK
+
+
+def _format_history_line(rec: dict) -> str:
+    """One line per event: timestamp, event name, then every other field as
+    key=value. Generic on purpose -- events carry different fields (see
+    gozer/history.py's module docstring for the full list per event type),
+    and a formatter that has to be taught about each one is exactly the kind
+    of thing that drifts out of sync with what's actually logged."""
+    ts = rec.get("ts", "?")
+    event = rec.get("event", "?")
+    extra = "  ".join(f"{k}={rec[k]}" for k in rec if k not in ("ts", "event"))
+    return f"{ts}  {event:<10}{extra}"
+
+
+def cmd_history(args) -> int:
+    gk, _ = _make(args)
+    records = history.read(gk.root)
+    n = args.n if args.n and args.n > 0 else 20
+    tail = records[-n:]
+    human = "\n".join(_format_history_line(r) for r in tail) or "(no history)"
+    _emit({"history": tail}, human, args.json)
     return EXIT_OK
 
 
@@ -433,6 +457,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     e = add("env", cmd_env, "print export lines for a lease")
     e.add_argument("lease")
+
+    h = add("history", cmd_history, "past leases: who held what, when, "
+                                    "for how long")
+    h.add_argument("-n", type=int, default=20,
+                   help="how many recent events to show (default 20)")
 
     rn = add("run", cmd_run, "acquire, run a command, always release")
     rn.add_argument("--chips", default="1")

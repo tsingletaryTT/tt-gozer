@@ -16,9 +16,10 @@ import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
-from gozer import procfd
+from gozer import history, procfd
 from gozer import reset as reset_mod
 from gozer.gatekeeper import Gatekeeper, parse_chip_request, utcnow
+from gozer.jsonstore import _elapsed_seconds
 from gozer.topology import Chip, all_chips
 
 DURATION_RE = re.compile(r"^(\d+)([smh]?)$")
@@ -186,7 +187,7 @@ class Keymaster:
             if ticket:
                 self.gk.dequeue(ticket)
 
-            return Grant(
+            grant = Grant(
                 lease_id=lease_id,
                 units=units,
                 chips=chips,
@@ -204,6 +205,12 @@ class Keymaster:
                 expanded=len(chips) > max_chips,
                 neighbours=self.gk.eth_neighbours(units),
             )
+            history.log(self.gk.root, "granted", lease_id=lease_id, who=who,
+                       reason=reason, chips=grant.bdfs,
+                       dev_indices=grant.dev_indices, units=units,
+                       detached=detached, pid=pid, expanded=grant.expanded,
+                       requested=min_chips)
+            return grant
 
     def _queue_or_refuse(self, ticket: str | None, request: dict,
                          no_queue: bool) -> dict | None:
@@ -235,7 +242,15 @@ class Keymaster:
                 f"ticket {ticket} is not in the queue -- it was cancelled, "
                 "granted, or abandoned long enough to be pruned; acquire "
                 "again to take a new one")
-        return self.gk.enqueue(request)
+        rec = self.gk.enqueue(request)
+        # Logged only for a brand-new ticket, not a reused one (the `if
+        # ticket:` branch above): reuse is `wait` replaying an existing
+        # queued request, which was already logged once when it was first
+        # enqueued.
+        history.log(self.gk.root, "queued", ticket=rec["ticket"],
+                   who=request["who"], min_chips=request["min_chips"],
+                   max_chips=request["max_chips"])
+        return rec
 
     # ---- release ----------------------------------------------------------
 
@@ -286,6 +301,9 @@ class Keymaster:
         fd_map = procfd.holders(self.gk.proc_root)
         still_open = [d for d in lease.get("dev_indices", []) if fd_map.get(d)]
         if still_open and not force:
+            history.log(self.gk.root, "refused", action="release",
+                       lease_id=lease_id, who=lease.get("who"),
+                       reason="device still open", dev_indices=still_open)
             return False, (
                 f"chips {still_open} still open by "
                 f"{sorted({p for d in still_open for p in fd_map[d]})} -- "
@@ -298,6 +316,10 @@ class Keymaster:
             unheld = [u for u in units
                       if self.gk.unit_lease(u) is None]
         if foreign:
+            history.log(self.gk.root, "refused", action="release",
+                       lease_id=lease_id, who=lease.get("who"),
+                       reason="units now belong to another lease",
+                       foreign=foreign)
             return False, (
                 "refusing to release: " +
                 ", ".join(f"{unit} now belongs to lease {other}"
@@ -306,6 +328,7 @@ class Keymaster:
                 "nothing was reset")
 
         messages = []
+        reset_ran = False
         reset_ok = False
         if unheld and not no_reset:
             # Our lock is gone but nobody else has taken these units yet.
@@ -315,6 +338,7 @@ class Keymaster:
                 f"not resetting: {', '.join(sorted(unheld))} no longer locked "
                 f"by lease {lease_id} (already reaped?)")
         elif not no_reset:
+            reset_ran = True
             reset_ok, out = reset_mod.reset_chips(lease["chips"],
                                                   runner=self.reset_runner)
             messages.append(out or ("reset ok" if reset_ok else "reset failed"))
@@ -326,6 +350,11 @@ class Keymaster:
         with self.gk.critical_section():
             foreign = self._units_held_elsewhere(units, lease_id)
             if foreign:
+                history.log(self.gk.root, "refused", action="release",
+                           lease_id=lease_id, who=lease.get("who"),
+                           reason="units now belong to another lease "
+                                  "(discovered after the reset)",
+                           foreign=foreign)
                 return False, (
                     "; ".join(messages + [
                         "aborted before teardown: " +
@@ -349,6 +378,12 @@ class Keymaster:
                 self.gk.open_claim_window(head[0]["ticket"])
                 messages.append(f"claim window opened for {head[0]['who']}")
 
+        since = lease.get("since")
+        duration_s = _elapsed_seconds(since, utcnow()) if since else None
+        history.log(self.gk.root, "released", lease_id=lease_id,
+                   who=lease.get("who"), chips=lease.get("chips", []),
+                   duration_s=duration_s, reset_ran=reset_ran,
+                   reset_ok=reset_ok if reset_ran else None)
         return True, "; ".join(m for m in messages if m)
 
     # ---- env and run ------------------------------------------------------

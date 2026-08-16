@@ -86,6 +86,40 @@ def test_stale_is_reaped_when_pid_dead_and_no_fd(tmp_path, sysfs):
     assert gk.read_lease("aaa") is None
 
 
+def test_reap_logs_a_reaped_event_to_history(tmp_path, sysfs):
+    from gozer import history
+    gk = make(tmp_path, sysfs)
+    lease = lease_for(gk, ["0000:01:00.0", "0000:02:00.0"], pid=4242)
+    gk.claim_unit("0000000000000002", lease)
+    gk.write_lease(lease)
+
+    gk.reconcile(reap=True)
+
+    records = [r for r in history.read(gk.root) if r["event"] == "reaped"]
+    assert len(records) == 1
+    rec = records[0]
+    assert rec["lease_id"] == "aaa"
+    assert rec["who"] == "claude:test"
+    assert sorted(rec["chips"]) == ["0000:01:00.0", "0000:02:00.0"]
+    assert isinstance(rec["duration_s"], (int, float))
+    assert "dead" in rec["why"].lower() or "process" in rec["why"].lower()
+
+
+def test_reap_of_a_detached_lease_past_grace_logs_why(tmp_path, sysfs):
+    from gozer import history
+    gk = make(tmp_path, sysfs)
+    lease = lease_for(gk, ["0000:01:00.0", "0000:02:00.0"], pid=4242,
+                      detached=True, since="2000-01-01T00:00:00Z")
+    gk.claim_unit("0000000000000002", lease)
+    gk.write_lease(lease)
+
+    gk.reconcile(reap=True)
+
+    records = [r for r in history.read(gk.root) if r["event"] == "reaped"]
+    assert len(records) == 1
+    assert "detached" in records[0]["why"].lower() or "grace" in records[0]["why"].lower()
+
+
 def test_stale_is_reported_but_not_reaped_when_reap_false(tmp_path, sysfs):
     gk = make(tmp_path, sysfs)
     lease = lease_for(gk, ["0000:01:00.0", "0000:02:00.0"], pid=4242)

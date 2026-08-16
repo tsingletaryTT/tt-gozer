@@ -74,6 +74,39 @@ queue:
 never hands those out, and `gozer adopt` wraps a lease around them so the queue stops
 treating them as free.
 
+To see who had what, in the past -- gozer's present-tense state (`gate/`, `leases/`) vanishes
+the moment a lease is released or reaped, so this is the only way to answer "who had the chips
+two hours ago" or "how often do we contend":
+
+```bash
+$ gozer history -n 5
+2026-08-14T12:40:11Z  granted    chips=['0000:03:00.0', '0000:04:00.0'] detached=False ...
+2026-08-14T13:02:11Z  queued     max_chips=1  min_chips=1  ticket=8f21  who=claude:tt-generate
+2026-08-14T13:25:07Z  released   chips=['0000:03:00.0', '0000:04:00.0'] duration_s=1496.0 ...
+2026-08-14T13:25:07Z  granted    chips=['0000:03:00.0', '0000:04:00.0'] ... who=claude:tt-generate
+2026-08-14T15:40:02Z  reaped     chips=['0000:01:00.0', '0000:02:00.0'] why=owning process is dead
+```
+
+## Commands
+
+| Command | Does |
+|---|---|
+| `status` [`--json`] | who holds what, and who is waiting -- read-only, never mutates state |
+| `topology` [`--json`] | chips, boards, and the lease grain |
+| `acquire` / `summon` `--chips N\|all\|LO-HI --who W` | take a lease on chips |
+| `wait <ticket>` [`--timeout 8m`] | block until a queued ticket is granted |
+| `queue` [`--json`] | list waiting requests |
+| `cancel <ticket>` | drop a queue ticket |
+| `renew <lease> --expect D` | extend a lease's advisory deadline |
+| `release` / `banish <lease>` [`--no-reset`] [`--force`] | give chips back (resets them) |
+| `reconcile` [`--sudo`] | re-derive state from kernel truth, reaping what is genuinely dead |
+| `adopt <target> --who W` | wrap a lease around untracked running work |
+| `env <lease>` | print export lines for a lease |
+| `run --chips N -- <command>` | acquire, run a command, always release |
+| `history` [`-n N`] [`--json`] | who held what, when, for how long -- the last 20 events by default |
+
+Every command also accepts `--json` for machine-readable output.
+
 ## For agents
 
 Point your agent at the two skills and one rule; that's the whole integration.
@@ -202,9 +235,24 @@ they read the output. If `status` shows `STALE`, run `gozer reconcile` to clear 
   queue/<seq>-<ticket>.json      FIFO, zero-padded seq
   queue/.claim-window            ticket entitled to claim, 90s expiry
   mutex/.gatekeeper.lock/        allocator mutex, self-heals after 30s
+  history.jsonl                  append-only log: granted, queued, released,
+                                  reaped, adopted, refused -- one JSON object
+                                  per line, forever (see below)
 ```
 
 All plain files. Inspect with `ls` and `cat`; recover by hand if you ever need to.
+
+`history.jsonl` is the one file here that is never deleted or rewritten, by design: it is the
+only place `gozer` remembers anything past-tense. Everything else in this state directory is
+present-tense and vanishes the moment a lease is released or reaped, which is exactly why
+`gozer history` exists -- to answer "who had the chips two hours ago" after the gate itself has
+already forgotten. Like the rest of `/tmp/tt-gozer`, it does not survive a reboot; that's a real
+limitation of living in `/tmp`, not a secret. Each line is written with a single `write()` call
+on a file opened `O_APPEND`, which is atomic on Linux for writes under `PIPE_BUF` (4096 bytes),
+so concurrent agents logging at the same moment cannot interleave a torn line. Logging is
+best-effort: a full disk or a permissions problem is swallowed rather than failing the command
+that triggered it (never worse for `release`, which has already done its destructive work by
+the time it logs).
 
 ## Safety properties
 

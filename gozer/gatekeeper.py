@@ -27,7 +27,7 @@ import secrets
 import time
 from dataclasses import dataclass
 
-from gozer import procfd
+from gozer import history, procfd
 # _elapsed_seconds lives in jsonstore (the shared, dependency-free home) so
 # gozer/queue.py can use the same implementation without importing this
 # module, which would be an import cycle. Imported into this namespace
@@ -440,7 +440,12 @@ class Gatekeeper:
         now = utcnow()
 
         results: list[ChipState] = []
-        reapable: list[tuple[str, dict]] = []
+        # unit -> (lease, why) -- a dict rather than the previous list of
+        # tuples, so the "add once per unit" dedup below is a plain
+        # setdefault instead of an `if (unit, lease) not in reapable` scan,
+        # and so the reap loop has the *reason* (for history's "reaped"
+        # event) right next to the lease it belongs to.
+        reapable: dict[str, tuple[dict, str]] = {}
 
         for chip in all_chips(self.boards):
             unit = self.unit_key_for(chip)
@@ -478,14 +483,13 @@ class Gatekeeper:
                     state = "CLAIMED"
                 else:
                     state = "STALE"
-                    if (unit, lease) not in reapable:
-                        reapable.append((unit, lease))
+                    reapable.setdefault(
+                        unit, (lease, "detached lease past its grace window"))
             elif owner is not None and procfd.pid_alive(owner, self.proc_root):
                 state = "CLAIMED"
             else:
                 state = "STALE"
-                if (unit, lease) not in reapable:
-                    reapable.append((unit, lease))
+                reapable.setdefault(unit, (lease, "owning process is dead"))
 
             results.append(ChipState(chip, state, lease, pids, overstayed))
 
@@ -510,12 +514,17 @@ class Gatekeeper:
             # given the lease_id our snapshot decided on and no-ops when the
             # lock now carries a different one -- or none at all.
             with self.critical_section():
-                for unit, lease in reapable:
+                for unit, (lease, why) in reapable.items():
                     lease_id = lease.get("lease_id")
                     if not self.release_unit(unit, expected_lease_id=lease_id):
                         continue
                     if lease_id:
                         self.delete_lease(lease_id)
+                    since = lease.get("since")
+                    duration_s = _elapsed_seconds(since, now) if since else None
+                    history.log(self.root, "reaped", lease_id=lease_id,
+                               who=lease.get("who"), chips=lease.get("chips", []),
+                               duration_s=duration_s, why=why)
             # Re-derive so callers see FREE rather than the pre-reap STALE.
             return self.reconcile(reap=False)
 
