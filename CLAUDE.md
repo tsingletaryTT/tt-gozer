@@ -128,3 +128,39 @@ and roughly what fixing it would take.
 * Hardware spike: does resetting one ASIC perturb a live neighbour's eth links?
 * Fix `tt-hardware-primer`.
 * Revisit per-chip leases if two concurrent tenants proves too few.
+
+## Real-use fixes and observability (2026-08-15/16)
+
+**Original request:** three improvements found by inspecting a live box after real use --
+1) `gozer status` was mutating state (reaping) as a side effect of being looked at; 2) there
+was no way to see who held what in the past, only right now; 3) nothing reconciled unless a
+`gozer` command happened to run, so a crashed lease could sit stale for hours.
+
+**1. `status` stops mutating state.** `cmd_status` called `reconcile()`'s `reap=True` default,
+so an investigator running `gozer status` on a two-hour-old lease reaped it as a side effect --
+destroying the evidence before it could be read. Now `reconcile(reap=False)`: status reports
+every state, including `STALE`, without touching disk. `free_units()` (and therefore
+`acquire`) deliberately keeps `reap=True` -- untouched, per its own comment, because a `STALE`
+unit would otherwise stay unallocatable until a human ran `gozer reconcile` by hand. Docs
+(README, `gozer-gatekeeper` SKILL.md, the design spec) updated everywhere the old "status
+already reaped it" language appeared. TDD: a test pinning "status leaves STALE on disk" failed
+red against the old code before the fix landed.
+
+**2. Append-only history.** New `gozer/history.py` writes `<GOZER_ROOT>/history.jsonl` --
+`granted`, `queued`, `released`, `reaped`, `adopted`, `refused`, one JSON line per event,
+appended via a single `O_APPEND` `os.write()` (atomic under Linux's 4096-byte `PIPE_BUF`, so
+concurrent agents cannot interleave a torn line) and best-effort (`OSError` swallowed, so a
+full disk can never fail an `acquire`/`release`). New `gozer history [-n N] [--json]` reads it
+back. This is the one file in `GOZER_ROOT` that is never deleted -- everything else is
+present-tense and vanishes on release/reap.
+
+**3. Optional periodic reconciliation.** `contrib/gozer-reconcile.{service,timer}`: a systemd
+**user** unit running `gozer reconcile` every 5 minutes, so a crashed lease self-heals even
+between commands. Never enabled automatically -- `install.sh` only prints the two
+`ln`/`systemctl --user enable` commands, since flipping on a systemd unit is a machine change
+the tool should not make unasked. The service checks for the `gozer` binary and swallows its
+own output so a broken box fails quietly (one failed-unit transition per tick) instead of
+spamming the journal, and `Restart=no` stops it from spinning.
+
+All three landed as separate commits, each with its own failing-test-first evidence; full suite
+(217 tests) green throughout.

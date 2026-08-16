@@ -52,3 +52,15 @@ case ":${PATH}:" in
 esac
 
 echo "  done. Try: gozer status"
+
+echo
+echo "--- optional: periodic reconciliation ---"
+echo "  contrib/gozer-reconcile.{service,timer} run 'gozer reconcile' every 5"
+echo "  minutes, so a crashed lease's lock gets cleared even if nobody runs a"
+echo "  gozer command in between. NOT installed or enabled automatically --"
+echo "  enabling a systemd unit changes your machine in a way you did not ask"
+echo "  for. If you want it, run these yourself:"
+echo "    mkdir -p ~/.config/systemd/user"
+echo "    ln -sfn \"$REPO/contrib/gozer-reconcile.service\" ~/.config/systemd/user/"
+echo "    ln -sfn \"$REPO/contrib/gozer-reconcile.timer\" ~/.config/systemd/user/"
+echo "    systemctl --user enable --now gozer-reconcile.timer"

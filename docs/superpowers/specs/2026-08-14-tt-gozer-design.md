@@ -553,6 +553,44 @@ State these plainly in the README rather than implying safety that is not there.
   similar agent daemon could read or adopt it later, and DRA/`tt-dra-driver` remains the
   path if the box ever joins a cluster.
 
+## Observability: the append-only history log
+
+*Added after real use, 2026-08-15/16.* Everything above is present-tense: `gate/` and
+`leases/` describe the gate *right now*, and forget a lease the moment it is released or
+reaped. There was no way to answer "who had the chips two hours ago", "how long do leases
+actually run", or "how often do we contend" -- the founding requirement (who holds the device
+is legible) held only in the present tense.
+
+`gozer/history.py` adds `<GOZER_ROOT>/history.jsonl`: one JSON object per line, appended
+forever, never rewritten. It lives inside `GOZER_ROOT` (not a per-user path like
+`~/.local/state`) because the point is one shared timeline across every agent on the box; a
+per-user path would fragment it. Like the rest of `/tmp/tt-gozer`, it does not survive reboot.
+
+Each write is a single `os.write()` to an fd opened `O_APPEND`; on Linux that is atomic under
+`PIPE_BUF` (4096 bytes), so concurrent agents cannot interleave a torn line. Every write is
+best-effort -- an `OSError` from `open()` or `write()` is swallowed -- because a full disk or
+permissions problem must never fail an `acquire` or, worse, a `release`.
+
+Six events, logged at their one true source: `granted`/`queued` in `Keymaster.acquire`,
+`released`/`refused` in `Keymaster.release`, `reaped` in `Gatekeeper.reconcile`'s reap loop,
+`adopted` in `cli.cmd_adopt`. `gozer history [-n N] [--json]` reads it back: the last 20 events
+by default, human-readable and newest-last, or raw records with `--json`.
+
+## Optional periodic reconciliation
+
+*Added after real use, 2026-08-15/16.* Nothing reconciles unless a `gozer` command runs. On a
+real box, a crashed lease's locks sat for over two hours because nothing invoked the tool in
+between -- the gate *looked* held with nobody holding it.
+
+`contrib/gozer-reconcile.{service,timer}` are a systemd **user** unit pair: a oneshot service
+running `gozer reconcile`, triggered by a timer every 5 minutes (`Persistent=false` -- there is
+nothing to "catch up" on a missed tick; whatever is stale now will still be stale in 5 more
+minutes). `install.sh` never enables this: it only prints the two commands, because enabling a
+systemd unit changes the user's machine in a way they did not ask for. The service is harmless
+if `gozer` is absent or the topology is unreadable -- it checks for the binary before invoking
+it, swallows `gozer reconcile`'s own stdout/stderr, and never restarts on failure, so a broken
+box produces one quiet failed-unit transition per tick rather than a noisy journal.
+
 ## Open items
 
 * Confirm on hardware whether resetting one ASIC perturbs a live neighbour's ethernet

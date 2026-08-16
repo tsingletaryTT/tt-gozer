@@ -1,0 +1,25 @@
+# Periodic `gozer reconcile`, so a crashed lease's lock gets cleared even
+# when nothing invokes gozer in between. Found on a real box: a crashed
+# agent's lease sat for over two hours because nobody happened to run a
+# gozer command -- the gate *looked* held with nobody holding it.
+#
+# NOT installed or enabled automatically -- see install.sh's printed
+# instructions, or the README's "Install" section, for the two commands
+# that turn this on. Enabling a systemd unit changes the user's machine in
+# a way they did not ask for, so gozer never does it on their behalf.
+#
+# Harmless if gozer is not installed, or the sysfs topology is unreadable:
+# ExecStart checks for the binary before invoking it (a missing `gozer`
+# exits 1 quietly instead of a "command not found" failure), and swallows
+# `gozer reconcile`'s own stdout/stderr so a broken box produces a single
+# quiet failed-unit transition each run rather than repeating error text
+# into the journal every 5 minutes. Restart=no keeps a persistently broken
+# box from spinning.
+
+[Unit]
+Description=gozer reconcile -- garbage-collect stale Tenstorrent chip leases
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'command -v gozer >/dev/null 2>&1 || exit 1; exec gozer reconcile >/dev/null 2>&1'
+Restart=no

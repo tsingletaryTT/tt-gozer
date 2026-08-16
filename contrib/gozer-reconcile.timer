@@ -1,0 +1,17 @@
+# Runs gozer-reconcile.service every 5 minutes. See that file's comments for
+# why this exists and why it is never enabled automatically.
+
+[Unit]
+Description=Run gozer reconcile every 5 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=5min
+# Do not fire immediately on boot to "catch up" on missed runs -- reconcile
+# is a periodic health-check, not a task with a deadline, and there is
+# nothing to catch up on: whatever is stale will still be stale 5 minutes
+# from now, and will get caught by the next regular tick.
+Persistent=false
+
+[Install]
+WantedBy=timers.target

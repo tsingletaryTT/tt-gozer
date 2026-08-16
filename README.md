@@ -37,6 +37,26 @@ holds many unrelated skills and linking over it would clobber them.
 
 Lock state lives in `/tmp/tt-gozer/`, created on first use. Nothing needs root.
 
+**Optional: periodic reconciliation.** Nothing reconciles unless a `gozer` command runs, so a
+crashed agent's lease can sit stale for hours if nobody happens to invoke gozer in the
+meantime — a real box hit this: a crashed lease's locks sat for over two hours because nothing
+ran a gozer command. `contrib/gozer-reconcile.{service,timer}` run `gozer reconcile` every 5
+minutes as a systemd **user** unit, so the gate self-heals even between commands. The installer
+never enables this — it only prints the two commands, because enabling a systemd unit changes
+your machine in a way you did not ask for:
+
+```bash
+mkdir -p ~/.config/systemd/user
+ln -sfn ~/code/tt-gozer/contrib/gozer-reconcile.service ~/.config/systemd/user/
+ln -sfn ~/code/tt-gozer/contrib/gozer-reconcile.timer ~/.config/systemd/user/
+systemctl --user enable --now gozer-reconcile.timer
+```
+
+The service is harmless if `gozer` is not installed or the sysfs topology is unreadable — it
+checks for the binary first, swallows `gozer reconcile`'s own output, and never restarts on
+failure, so a broken box gets one quiet failed-unit transition per tick instead of a noisy
+journal.
+
 ## For humans
 
 The safest form binds the lease to a process, so it cannot leak if you Ctrl-C:

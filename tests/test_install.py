@@ -93,3 +93,62 @@ def test_skills_have_frontmatter_with_functional_descriptions():
         desc = [l for l in text.splitlines() if l.startswith("description:")][0]
         # An agent must match on function, not on the Ghostbusters metaphor.
         assert "chip" in desc.lower() or "hardware" in desc.lower()
+
+
+def test_contrib_systemd_units_exist_and_are_well_formed():
+    service = os.path.join(REPO, "contrib", "gozer-reconcile.service")
+    timer = os.path.join(REPO, "contrib", "gozer-reconcile.timer")
+    assert os.path.exists(service)
+    assert os.path.exists(timer)
+
+    svc_text = open(service).read()
+    assert "[Service]" in svc_text
+    assert "Type=oneshot" in svc_text
+    assert "gozer reconcile" in svc_text
+    # Must not restart on failure -- a wedged or absent gozer must not spin.
+    assert "Restart=no" in svc_text
+    # Harmless if gozer is absent: check for the binary before invoking it,
+    # rather than letting a bare `gozer reconcile` fail with "command not
+    # found" noise.
+    assert "command -v gozer" in svc_text
+
+    timer_text = open(timer).read()
+    assert "[Timer]" in timer_text
+    assert "5min" in timer_text
+    assert "Persistent=false" in timer_text
+    assert "[Install]" in timer_text
+
+
+def test_install_sh_never_enables_the_systemd_unit(tmp_path):
+    """Enabling a systemd unit changes the user's machine in a way they did
+    not ask for -- install.sh must only ever print the two commands, never
+    run them. This also must never touch the real $HOME; the test's fake
+    HOME is what proves that."""
+    home = tmp_path / "home"
+    (home / ".local" / "bin").mkdir(parents=True)
+    (home / ".claude" / "skills").mkdir(parents=True)
+    env = dict(os.environ, HOME=str(home))
+
+    r = subprocess.run([os.path.join(REPO, "install.sh")],
+                       env=env, capture_output=True, text=True)
+
+    assert r.returncode == 0, r.stderr
+    assert "systemctl" not in " ".join([r.stdout, r.stderr]) or \
+        "systemctl --user enable" in r.stdout
+    # No unit was actually installed anywhere under the fake HOME.
+    assert not (home / ".config" / "systemd" / "user" /
+               "gozer-reconcile.timer").exists()
+
+
+def test_install_sh_prints_the_optional_reconcile_instructions(tmp_path):
+    home = tmp_path / "home"
+    (home / ".local" / "bin").mkdir(parents=True)
+    (home / ".claude" / "skills").mkdir(parents=True)
+    env = dict(os.environ, HOME=str(home))
+
+    r = subprocess.run([os.path.join(REPO, "install.sh")],
+                       env=env, capture_output=True, text=True)
+
+    assert r.returncode == 0, r.stderr
+    assert "gozer-reconcile.timer" in r.stdout
+    assert "systemctl --user enable" in r.stdout
