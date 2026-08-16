@@ -33,12 +33,17 @@ EXIT_NO_TOPOLOGY = 14
 # right now" -- overloading that told an agent to go wait for hardware when
 # what it actually needed was to stop its own workload first.
 EXIT_RELEASE_REFUSED = 15
-# The allocator mutex could not be taken. Newly reachable from read-only
-# commands: `status` reconciles, and a reconcile that finds something to reap
-# now takes the mutex to do it (so it cannot delete a lock another process
-# just created). A cross-user wedged mutex therefore surfaces here rather
-# than as a traceback -- and `gozer status` is exactly where the gatekeeper
-# skill sends someone whose gate looks wedged.
+# The allocator mutex could not be taken. Reachable from any command whose
+# reconcile finds something to reap -- the reap takes the mutex to do it (so
+# it cannot delete a lock another process just created) -- which today means
+# `acquire`/`run`/`wait` (via free_units) and the explicit `reconcile`. NOT
+# `status`: status runs reconcile(reap=False), precisely so it never mutates
+# state or takes the mutex, so a stuck mutex cannot make the one command
+# documented as "safe to run any time" hang or fail. (This was reachable from
+# `status` too for one release, back when status still reaped as a side
+# effect of looking -- see cmd_status's comment.) A cross-user wedged mutex
+# therefore surfaces here rather than as a traceback, from whichever of the
+# commands above the gatekeeper skill sends someone to run.
 EXIT_GATE_STUCK = 16
 # Conventional 128 + SIGINT, for `gozer run` interrupted by a signal.
 EXIT_INTERRUPTED = 130
@@ -61,7 +66,20 @@ def _emit(payload: dict, human: str, as_json: bool) -> None:
 
 def cmd_status(args) -> int:
     gk, _ = _make(args)
-    states = gk.reconcile()
+    # reap=False: `status` is documented as the safe, read-only command --
+    # the one the gatekeeper skill sends someone to when the gate looks
+    # wedged, including to look at evidence after an incident. It must never
+    # delete anything as a side effect of being looked at. This was found on
+    # a real box: an investigator ran `gozer status` on a two-hour-old lease,
+    # and the act of looking reaped it (reconcile's old reap=True default),
+    # destroying the record before it could be read.
+    #
+    # This means `status` can now show STALE chips it used to silently clean
+    # up. That is the point -- it is honest about what is actually on disk.
+    # `acquire` (via free_units) and `reconcile` still reap with reap=True;
+    # that stays load-bearing there (see free_units' comment) and
+    # deliberate here (reconcile is the explicit, intentional reaper).
+    states = gk.reconcile(reap=False)
     payload = {
         "grain": gk.grain,
         "chips": [
@@ -85,6 +103,10 @@ def cmd_status(args) -> int:
         extra = f"  {who} pid {pid}" if who else ""
         if s.state == "BUSY-UNTRACKED":
             extra = f"  pid {','.join(map(str, s.pids))} — no lease; try: gozer adopt"
+        elif s.state == "STALE":
+            # status leaves a STALE lease on disk (see above) -- say what
+            # clears it, since this is no longer done silently.
+            extra += "  — stale; clear it with: gozer reconcile"
         if s.overstayed:
             extra += "  OVERSTAYED"
         lines.append(f"  chip {s.chip.dev_index}  {s.chip.bdf}  {s.state:<15}{extra}")

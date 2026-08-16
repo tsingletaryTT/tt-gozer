@@ -166,7 +166,7 @@ Six states, derived from comparing the lease files against the kernel:
 | ✓ | by the owner | `HELD` | working as intended |
 | ✓ | by someone else | `HELD-FOREIGN` | the lease is lying — investigate |
 | ✓ | none, owner alive (or, for a detached lease, still inside its 900s grace window) | `CLAIMED` | setup phase, or between runs |
-| ✓ | none, owner gone (or, for a detached lease, its 900s grace window elapsed) | `STALE` | reaped |
+| ✓ | none, owner gone (or, for a detached lease, its 900s grace window elapsed) | `STALE` | reaped by `acquire` or `reconcile` — `status` reports it but leaves it on disk; clear it with `gozer reconcile` |
 | ✗ | yes | `BUSY-UNTRACKED` | untracked work — never handed out |
 | ✗ | none | `FREE` | allocatable |
 
@@ -183,6 +183,14 @@ Reaping is deliberately conservative: a non-detached lease is removed only when 
 window has elapsed with no fd ever opened. A live process that has run past its advisory
 `--expect` is flagged `OVERSTAYED` and left strictly alone. Nothing here is in a hurry to take
 hardware away from something that might still be using it.
+
+**`status` never reaps.** `gozer status` calls the same reconciliation `acquire` and
+`reconcile` do, but with reaping turned off — it reports every state, including `STALE`, without
+deleting anything. Only `gozer acquire` (as a side effect of asking "what's free?") and the
+explicit `gozer reconcile` actually remove a stale lease. This matters: an earlier version of
+`status` reaped by default, so the act of *looking* at a lease could destroy it — an
+investigator ran `gozer status` on a lease they wanted to inspect, and it was gone by the time
+they read the output. If `status` shows `STALE`, run `gozer reconcile` to clear it.
 
 ## State format
 
@@ -203,6 +211,8 @@ All plain files. Inspect with `ls` and `cat`; recover by hand if you ever need t
 - **Never opens `/dev/tenstorrent/*`.** Topology comes from `/sys/class/tenstorrent/`,
   busy-state from `os.readlink` on `/proc/*/fd`. So `gozer status` is safe to run in the
   middle of somebody else's job.
+- **`status` never mutates state, either.** It reconciles with reaping turned off, so looking
+  at the gate cannot delete a lease as a side effect. Only `acquire` and `reconcile` reap.
 - **Resets by PCI BDF only**, never by device index — `tt-smi -r` reads a bare integer as a
   UMD logical ID, a different namespace, which could reset the wrong device.
 - **Never emits the board-wide M3/DMC reset.** `tt-smi -r <bdf>` is per-ASIC; `reset_m3` is

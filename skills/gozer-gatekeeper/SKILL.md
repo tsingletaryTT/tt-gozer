@@ -26,7 +26,8 @@ What to do about each, which the README does not say:
 - `HELD`, `CLAIMED` — nothing. Working as intended.
 - `HELD-FOREIGN` — investigate before anything else; the lease is lying.
 - `BUSY-UNTRACKED` — do not take it. Adopt it (below).
-- `STALE` — already reaped for you; re-run `gozer status`.
+- `STALE` — `status` reports it but deliberately leaves it on disk (it never mutates state).
+  Clear it with `gozer reconcile`.
 
 `OVERSTAYED` is a flag, not a state: the lease ran past its advisory `--expect`.
 Whatever is holding the chip (fd open, or a detached lease still inside its
@@ -52,6 +53,11 @@ only removed once its 900-second grace window has elapsed with no fd ever
 opened. If a lock survives reconcile, the work behind it is not finished —
 leave it alone.
 
+`gozer status` is read-only: it shows you `STALE` but never removes it, so
+that looking at the gate can never destroy the evidence you were looking at.
+`gozer reconcile` (and `gozer acquire`, as a side effect of allocation) are
+the only commands that actually reap.
+
 Cross-user note: `/proc/<pid>/fd` is readable only by its owner, so fd truth
 covers your own processes. If you suspect another user's process:
 
@@ -69,12 +75,12 @@ gozer release <lease-id>
 ```
 
 **With one exception you will hit often.** If the lease's lock is already gone —
-`reconcile` reaps on every `acquire` and `status`, so a crashed or abandoned
-lease is usually reaped before anyone releases it — `release` does bookkeeping
-only and says `not resetting: … no longer locked`. It is not being lazy: those
-chips are free for anyone to take at that moment, so a reset would land on
-whoever grabs them next. Nothing has reset that silicon, and the next plain
-`acquire` gets it un-reset.
+`reconcile` reaps as a side effect of every `acquire` (never of `status`, which is
+read-only), so a crashed or abandoned lease is often reaped before anyone releases
+it — `release` does bookkeeping only and says `not resetting: … no longer locked`.
+It is not being lazy: those chips are free for anyone to take at that moment, so a
+reset would land on whoever grabs them next. Nothing has reset that silicon, and the
+next plain `acquire` gets it un-reset.
 
 To actually reset it, take the unit and give it back:
 

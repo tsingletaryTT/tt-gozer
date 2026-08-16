@@ -252,13 +252,17 @@ def test_release_while_a_device_is_open_has_its_own_exit_code(env, capsys, tmp_p
 
 
 def test_a_stuck_mutex_reports_itself_instead_of_traceback(env, capsys, monkeypatch):
-    """`status` can now hit the mutex, so it must handle a stuck one.
+    """`reconcile` (the explicit reaper) must handle a stuck mutex cleanly.
 
     The reap inside reconcile takes the mutex (that is what stops it deleting
     a lock another process just created), which makes TimeoutError reachable
-    from a read-only command for the first time. Unhandled it exits 1 with a
-    traceback -- from the one command the gatekeeper skill tells you to run
-    when the gate looks wedged.
+    from reconcile's reap. Unhandled it exits 1 with a traceback -- from the
+    command the gatekeeper skill tells you to run when the gate looks wedged.
+
+    This used to be exercised via `status`, back when status also reaped
+    (reap=True) as a side effect of looking. Now that `status` is read-only
+    (reap=False) and never reaches the mutex at all, `reconcile` is the one
+    that must be proven safe against a stuck mutex.
     """
     from gozer import gatekeeper as gk_mod
     from gozer.gatekeeper import Gatekeeper
@@ -277,8 +281,30 @@ def test_a_stuck_mutex_reports_itself_instead_of_traceback(env, capsys, monkeypa
     monkeypatch.setattr(gk_mod.Gatekeeper, "critical_section",
                         lambda self, timeout=10.0: _stuck_mutex())
 
-    code, _ = run(["status"], capsys)
+    code, _ = run(["reconcile"], capsys)
     assert code == 16
+
+
+def test_status_no_longer_reaches_the_stuck_mutex(env, capsys, monkeypatch):
+    """The flip side of the test above: since `status` is now reap=False, a
+    stuck mutex must not affect it at all -- it never even tries to take the
+    lock, so it must keep working (exit 0) rather than surfacing exit 16."""
+    from gozer import gatekeeper as gk_mod
+    from gozer.gatekeeper import Gatekeeper
+
+    gk = Gatekeeper()
+    stale = {"lease_id": "old", "detached": True, "since": "2000-01-01T00:00:00Z",
+             "chips": ["0000:01:00.0"], "dev_indices": [0],
+             "units": ["0000000000000002"], "who": "claude:crashed", "pid": 4242}
+    gk.claim_unit("0000000000000002", stale)
+    gk.write_lease(stale)
+
+    monkeypatch.setattr(gk_mod.Gatekeeper, "critical_section",
+                        lambda self, timeout=10.0: _stuck_mutex())
+
+    code, out = run(["status"], capsys)
+    assert code == 0
+    assert "STALE" in out
 
 
 @contextlib.contextmanager
@@ -396,3 +422,66 @@ def test_acquire_then_status_reports_the_lease_still_held(tmp_path, sysfs, monke
     # And the lease record itself must still be there -- not silently reaped.
     _, out = run(["env", lease_id], capsys)
     assert out.startswith("export TT_VISIBLE_DEVICES=")
+
+
+def test_status_leaves_a_stale_lease_on_disk_and_reports_it_as_stale(env, capsys):
+    """The bug found the hard way: `gozer status` used to call reconcile()
+    with its reap=True default, so the mere act of looking at a two-hour-old
+    lease deleted it -- destroying the evidence before a human could read it.
+    `status` must report STALE and leave the lease record and gate lock alone;
+    only `acquire` and `reconcile` may reap.
+    """
+    from gozer.gatekeeper import Gatekeeper
+    gk = Gatekeeper()
+    # pid 999999 is not registered in this fixture's fake /proc (only pid 1
+    # is), so it reads as dead -- the ordinary non-detached STALE path.
+    lease = {"lease_id": "deadpid", "detached": False, "since": "2000-01-01T00:00:00Z",
+             "chips": ["0000:01:00.0", "0000:02:00.0"], "dev_indices": [0, 1],
+             "units": ["0000000000000002"], "who": "claude:crashed", "pid": 999999}
+    gk.claim_unit("0000000000000002", lease)
+    gk.write_lease(lease)
+
+    code, out = run(["status", "--json"], capsys)
+
+    assert code == 0
+    states = {c["dev_index"]: c["state"] for c in json.loads(out)["chips"]}
+    assert states[0] == "STALE" and states[1] == "STALE"
+    # Left on disk -- status must not have reaped it.
+    assert gk.unit_lease("0000000000000002") is not None
+    assert gk.read_lease("deadpid") is not None
+
+
+def test_status_human_output_tells_you_to_reconcile_a_stale_chip(env, capsys):
+    from gozer.gatekeeper import Gatekeeper
+    gk = Gatekeeper()
+    lease = {"lease_id": "deadpid", "detached": False, "since": "2000-01-01T00:00:00Z",
+             "chips": ["0000:01:00.0", "0000:02:00.0"], "dev_indices": [0, 1],
+             "units": ["0000000000000002"], "who": "claude:crashed", "pid": 999999}
+    gk.claim_unit("0000000000000002", lease)
+    gk.write_lease(lease)
+
+    code, out = run(["status"], capsys)
+
+    assert code == 0
+    assert "STALE" in out
+    assert "gozer reconcile" in out
+
+
+def test_reconcile_then_removes_the_stale_lease_status_left_behind(env, capsys):
+    """Companion to the test above: `reconcile` is the explicit, intentional
+    reaper, so it must still clear what `status` now leaves in place."""
+    from gozer.gatekeeper import Gatekeeper
+    gk = Gatekeeper()
+    lease = {"lease_id": "deadpid", "detached": False, "since": "2000-01-01T00:00:00Z",
+             "chips": ["0000:01:00.0", "0000:02:00.0"], "dev_indices": [0, 1],
+             "units": ["0000000000000002"], "who": "claude:crashed", "pid": 999999}
+    gk.claim_unit("0000000000000002", lease)
+    gk.write_lease(lease)
+
+    run(["status", "--json"], capsys)  # confirmed above: leaves it in place
+
+    code, out = run(["reconcile"], capsys)
+
+    assert code == 0
+    assert gk.unit_lease("0000000000000002") is None
+    assert gk.read_lease("deadpid") is None

@@ -321,13 +321,21 @@ cache to bypass, and a flag that is accepted and never read is a placebo. Three 
 added: `15` release refused and nothing done (a device is still open, or the lease's units
 now belong to another lease) — previously overloaded onto `12`, which told an agent to wait
 for hardware when it needed to stop its own workload; `16` the allocator mutex is stuck,
-message naming the path to clear (newly reachable from `status`, because reaping now takes
-the mutex); and `130` for `gozer run` interrupted by a signal, the conventional 128 + SIGINT.
+message naming the path to clear; and `130` for `gozer run` interrupted by a signal, the
+conventional 128 + SIGINT.
+
+*Amended after real use:* `16` was briefly reachable from `status` too, for one release —
+`status` used to reap as a side effect of looking (see the STALE-state amendment above), and
+a reap that finds something to delete takes the mutex to do it. Now that `status` is
+`reap=False`, it never takes the mutex at all, so `16` is reachable only from commands whose
+reconcile actually reaps: `acquire`/`run`/`wait` (via `free_units`) and the explicit
+`reconcile`.
 
 ## Reconciliation — fd truth over bookkeeping
 
 The lease file records *who and why*. The kernel decides *free or busy*. `reconcile` runs
-implicitly before every `acquire` and `status`.
+implicitly before every `acquire` (with reaping on) and `status` (with reaping off — see the
+STALE-state amendment above).
 
 For each chip: `fd_busy` = does any process hold `/dev/tenstorrent/N` open (scan
 `/proc/*/fd` symlinks), and `leased` = is there a lock directory.
@@ -337,9 +345,20 @@ For each chip: `fd_busy` = does any process hold `/dev/tenstorrent/N` open (scan
 | ✓ | by the lease's pid/pgid | **HELD** | leave alone |
 | ✓ | by another pid | **HELD-FOREIGN** | flag loudly; never reallocate |
 | ✓ | none, pid alive | **CLAIMED** | honour — setup phase or between runs |
-| ✓ | none, pid dead | **STALE** | reap; mark board dirty (needs reset) |
+| ✓ | none, pid dead | **STALE** | reaped by `acquire`/`reconcile`; `status` reports it but leaves it on disk (see below); mark board dirty (needs reset) |
 | ✗ | yes | **BUSY-UNTRACKED** | never allocate; suggest `gozer adopt` |
 | ✗ | none | **FREE** | allocatable |
+
+*Amended during real use.* `status` originally called `reconcile()` with its `reap=True`
+default — the same call `acquire` makes — so the command documented as the safe one to run
+**deleted leases as a side effect of looking at them**. Found the hard way: an investigator ran
+`gozer status` to inspect a two-hour-old lease, and the act of looking reaped it, destroying the
+record before it could be read. `cmd_status` now calls `reconcile(reap=False)`: it reports every
+state, including `STALE`, without deleting anything. `free_units()` (and therefore `acquire`) is
+unchanged and must stay `reap=True` — a `STALE` unit would otherwise stay unallocatable until a
+human ran `gozer reconcile` by hand, so one crashed agent would block the box. `reconcile` remains
+the explicit, intentional reaper. A `STALE` chip in `status` output now names the fix: `gozer
+reconcile` clears it.
 
 Reaping requires the pid to be **gone** *and* no fd open. A lease whose process is alive is
 never force-reaped; if it runs past `expect_done` it is displayed as `OVERSTAYED` and left
