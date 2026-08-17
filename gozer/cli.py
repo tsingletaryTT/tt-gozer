@@ -140,7 +140,7 @@ def cmd_topology(args) -> int:
     return EXIT_OK
 
 
-def _render_grant(grant: Grant, gk) -> str:
+def _render_grant(grant: Grant, gk, owner_pid: int | None = None) -> str:
     idx = ",".join(str(i) for i in grant.dev_indices)
     lines = [f"granted: chips {idx}  (units {', '.join(grant.units)})"]
     if grant.expanded:
@@ -149,6 +149,9 @@ def _render_grant(grant: Grant, gk) -> str:
     lines.append(f"  export TT_VISIBLE_DEVICES={','.join(grant.bdfs)}")
     lines.append(f"  lease {grant.lease_id}   release with: "
                  f"gozer release {grant.lease_id}")
+    if owner_pid is not None:
+        lines.append(f"  owner pid {owner_pid}  (not detached -- held for as "
+                     "long as that pid lives, no grace window)")
     for bdf, who in grant.neighbours.items():
         lines.append(f"  ! live eth neighbour {bdf} held by {who} — "
                      "your reset on release may perturb it")
@@ -157,15 +160,43 @@ def _render_grant(grant: Grant, gk) -> str:
 
 def cmd_acquire(args) -> int:
     gk, km = _make(args)
-    # No `pid` is passed here: a bare `gozer acquire` has no process for
-    # gozer to supervise (it prints its export line and exits immediately),
-    # so Keymaster.acquire records this as a *detached* lease. See its
-    # docstring and Gatekeeper.reconcile's DETACHED_GRACE_SECONDS handling --
-    # a fixed sentinel pid (e.g. always-alive init) was tried and rejected,
-    # since that makes a detached lease immortal instead of just outliving
-    # the one-shot CLI process that created it.
+    # --owner-pid lets a *supervisor* (tt-station-agentd, holding a lease on
+    # behalf of a container it manages) claim non-detached semantics: the
+    # lease is judged by pid_alive(owner_pid) instead of the detached grace
+    # window, which matters because a root-owned process inside a container
+    # holds fds gozer -- running unprivileged -- can never see. Validate
+    # before it ever reaches Keymaster.acquire: a pid that is already dead
+    # would produce a lease that is reapable the instant it is made, which is
+    # worse than refusing outright, and a non-positive pid is never a real
+    # process id. Checked against the *configured* proc root (gk.proc_root),
+    # never the real /proc, so this validation is hermetic under tests.
+    if args.owner_pid is not None:
+        if args.owner_pid <= 0:
+            msg = f"--owner-pid must be a positive pid, got {args.owner_pid}"
+            _emit({"granted": False, "error": msg}, f"gozer: {msg}", args.json)
+            return EXIT_UNAVAILABLE
+        if not procfd.pid_alive(args.owner_pid, gk.proc_root):
+            msg = (f"--owner-pid {args.owner_pid} is not alive -- acquiring a "
+                  "lease for a dead process would be reapable the instant "
+                  "it was made; refusing instead of handing back a lease "
+                  "that would evaporate")
+            _emit({"granted": False, "error": msg}, f"gozer: {msg}", args.json)
+            return EXIT_UNAVAILABLE
+
+    # No `pid` is passed for the default (--owner-pid omitted) path: a bare
+    # `gozer acquire` has no process for gozer to supervise (it prints its
+    # export line and exits immediately), so Keymaster.acquire records this
+    # as a *detached* lease. See its docstring and Gatekeeper.reconcile's
+    # DETACHED_GRACE_SECONDS handling -- a fixed sentinel pid (e.g.
+    # always-alive init) was tried and rejected, since that makes a detached
+    # lease immortal instead of just outliving the one-shot CLI process that
+    # created it. --owner-pid opts out of all that: it passes a real,
+    # validated, live pid through as `pid`, producing a non-detached lease
+    # that Keymaster.acquire/Gatekeeper.reconcile judge by ordinary
+    # process-death detection instead.
     result = km.acquire(args.chips, who=args.who, reason=args.reason,
                         exact=args.exact, fresh=args.fresh, expect=args.expect,
+                        pid=args.owner_pid,
                         ticket=args.ticket, no_queue=args.no_queue)
     if isinstance(result, Grant):
         payload = {
@@ -173,9 +204,11 @@ def cmd_acquire(args) -> int:
             "chips": result.bdfs, "dev_indices": result.dev_indices,
             "expanded": result.expanded, "requested": result.requested,
             "neighbours": result.neighbours,
+            "owner_pid": args.owner_pid,
             "env": km.env_for(result),
         }
-        _emit(payload, _render_grant(result, gk), args.json)
+        _emit(payload, _render_grant(result, gk, owner_pid=args.owner_pid),
+              args.json)
         return EXIT_OK
 
     if result is None:
@@ -425,6 +458,12 @@ def build_parser() -> argparse.ArgumentParser:
         a.add_argument("--ticket", default=None, help="claim against a queue ticket")
         a.add_argument("--no-queue", action="store_true",
                        help="fail instead of queueing")
+        a.add_argument("--owner-pid", type=int, default=None, dest="owner_pid",
+                       help="a supervisor's pid to own this lease; the lease "
+                       "is non-detached and judged by that pid's liveness "
+                       "instead of the detached grace window (e.g. a "
+                       "container-launching daemon whose child fds gozer "
+                       "cannot see)")
 
     w = add("wait", cmd_wait, "block until a ticket is granted")
     w.add_argument("ticket")
