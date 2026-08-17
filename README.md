@@ -113,7 +113,7 @@ $ gozer history -n 5
 |---|---|
 | `status` [`--json`] | who holds what, and who is waiting -- read-only, never mutates state |
 | `topology` [`--json`] | chips, boards, and the lease grain |
-| `acquire` / `summon` `--chips N\|all\|LO-HI --who W` | take a lease on chips |
+| `acquire` / `summon` `--chips N\|all\|LO-HI --who W` [`--owner-pid N`] | take a lease on chips |
 | `wait <ticket>` [`--timeout 8m`] | block until a queued ticket is granted |
 | `queue` [`--json`] | list waiting requests |
 | `cancel <ticket>` | drop a queue ticket |
@@ -229,6 +229,16 @@ until the window elapses or a fd opens, `HELD` as soon as anything opens the dev
 holder counts, so `HELD-FOREIGN` never applies to it), and reaped as `STALE` if the window
 elapses with the device still unopened. `gozer run`'s lease is never detached, since its
 process is supervised for the lease's whole lifetime.
+
+**`--owner-pid N`** opts a bare `acquire` out of detachment the same way `gozer run` does,
+for a caller that can't exec the workload itself — e.g. `tt-station-agentd`, which takes a
+lease, launches a serving container pinned to the granted chips, and releases when the
+container stops. A root-owned process inside that container has file descriptors an
+unprivileged gozer can never see, so a detached lease taken on its behalf would be reaped
+~15 minutes in in a perfectly healthy session. Pass the supervisor's own pid with
+`--owner-pid` and the lease is judged by that pid's liveness instead, exactly like `gozer
+run`'s: `CLAIMED` for as long as the supervisor lives, no fd or grace window needed. A
+non-positive pid, or one that is not alive right now, is refused rather than accepted.
 
 Reaping is deliberately conservative: a non-detached lease is removed only when its process is
 **gone** *and* no file descriptor remains; a detached lease is removed only once its grace

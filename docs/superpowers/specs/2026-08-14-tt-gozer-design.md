@@ -287,7 +287,7 @@ granted: chips 2,3  (board 0000000000000001, p300c)
 gozer status [--json] [--watch]
 gozer topology [--json]
 gozer acquire --chips N|all|LO-HI [--exact T] [--who W] [--reason R]
-              [--expect DURATION] [--fresh] [--json]
+              [--expect DURATION] [--fresh] [--owner-pid N] [--json]
 gozer wait <ticket> [--timeout 8m] [--json]
 gozer queue [--json]
 gozer cancel <ticket>
@@ -398,6 +398,43 @@ corrupts a live run, reaping too late costs a delay. `--expect` is **not** wired
 remains advisory, never a reaper.
 
 `gozer run` is unaffected — it owns a real process and keeps exact pid semantics.
+
+### Supervisor-owned leases
+
+*Added 2026-08-16, for tt-station-agentd.* `gozer run` fixes the detached problem by owning
+the workload itself — but not every caller can. tt-station-agentd takes a lease, launches a
+serving container pinned to the granted chips, and releases when the container stops; it
+never execs the workload as its own child the way `gozer run` does; the workload's real
+process lives inside a container namespace, root-owned.
+
+That root-owned process is exactly the case a bare detached lease cannot cover safely: its
+file descriptors under `/proc/<pid>/fd` are readable only by their owner, so an unprivileged
+gozer can never see them, ever, at any point in the container's life — this isn't the
+acquire-to-workload-start gap the grace window forgives, it is permanent invisibility. A
+lease taken for that container would sit with no observable fd, age past
+`DETACHED_GRACE_SECONDS`, and be reaped as `STALE` roughly fifteen minutes into a perfectly
+healthy session — the chips would read `FREE` while the container kept using them, which is
+the exact collision gozer exists to prevent.
+
+`gozer acquire --owner-pid N` covers this: `N` is the *supervisor's* own pid (long-lived,
+outside the container), passed through as `acquire`'s pre-existing `pid` parameter — the same
+one `gozer run` already uses for its own child. The resulting lease is **not detached**: it
+is judged in `Gatekeeper.reconcile` by ordinary `pid_alive(N)` the same as a `gozer run`
+lease, not by elapsed time. It stays `CLAIMED` for exactly as long as the supervisor lives —
+no fd required, no grace window, no fifteen-minute surprise — and is reaped the moment the
+supervisor is gone (and no fd remains), exactly like any other non-detached lease.
+
+`--owner-pid` is validated before it ever reaches `Keymaster.acquire`: a non-positive value,
+or a pid that is not alive at acquire time (checked against the configured proc root, never
+the real `/proc`, so tests stay hermetic), is refused outright rather than accepted. Handing
+back a lease for an already-dead pid would make it reapable the instant it was created —
+worse than refusing with a clear message.
+
+The flag is wired into `cmd_acquire` only, deliberately not `cmd_wait`: a ticket replayed by
+`wait` belongs to whoever is waiting *now*, and `wait` never re-derives a `pid` from the
+ticket it replays (see the Queue section) — inheriting a stale supervisor pid recorded on an
+old ticket would misattribute a fresh grant to a supervisor that may no longer even be the
+one waiting.
 
 ## Queue
 
