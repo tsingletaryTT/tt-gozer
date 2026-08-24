@@ -30,8 +30,8 @@ What to do about each, which the README does not say:
   Clear it with `gozer reconcile`.
 
 `OVERSTAYED` is a flag, not a state: the lease ran past its advisory `--expect`.
-Whatever is holding the chip (fd open, or a detached lease still inside its
-grace window) is still legitimately there. **This is not permission to reap
+Whatever is holding the chip (fd open, a live owning process, or a detached
+lease still inside its grace window) is still legitimately there. **This is not permission to reap
 it.** Ask the human, or wait.
 
 ## Untracked work
@@ -52,6 +52,25 @@ descriptor remains; a detached lease (no supervised process to begin with) is
 only removed once its 900-second grace window has elapsed with no fd ever
 opened. If a lock survives reconcile, the work behind it is not finished —
 leave it alone.
+
+**Not every lease with an owning pid came from `gozer run`.** `gozer acquire
+--owner-pid N` produces a non-detached lease whose owner is a *supervisor* —
+something that took the lease and then launched the real workload elsewhere
+(`tt-station-agentd` and its serving container are the motivating case). Two
+consequences when you are reading such a lease:
+
+- **No fd is not evidence of a dead lease here.** The workload may be a
+  root-owned process in a container whose `/proc/<pid>/fd` an unprivileged
+  gozer can never read — permanently, not just during startup. "pid alive, no
+  fd, hours old" is the *expected* healthy shape, not a stale lock.
+- **The pid you see is the supervisor, not the workload.** Killing it, or
+  reasoning about what the chips are doing from it, will mislead you. Find the
+  workload through the supervisor (the container, the unit), not through the
+  lease.
+
+Reconciliation already treats these correctly — it judges them by
+`pid_alive(N)` like any other non-detached lease. This note is so *you* do not
+diagnose one as stale when the tool has not.
 
 `gozer status` is read-only: it shows you `STALE` but never removes it, so
 that looking at the gate can never destroy the evidence you were looking at.

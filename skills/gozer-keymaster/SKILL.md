@@ -57,6 +57,32 @@ gozer release <lease-id>
 Release resets your chips so the next tenant gets clean silicon. Use
 `--no-reset` only when you are handing off to your own follow-up run.
 
+### When something *else* will hold the chips: `--owner-pid`
+
+The grace window assumes you are the one about to open the device. If you are a
+**supervisor** — you take the lease and then launch a container, a systemd unit,
+or any process whose file descriptors you cannot read — that assumption is wrong
+for you. A root-owned process inside a container holds fds an unprivileged gozer
+can never see, at any point in its life, so a detached lease taken on its behalf
+would be reaped as `STALE` about fifteen minutes into a perfectly healthy
+session. Pass your *own* pid instead:
+
+```bash
+gozer acquire --chips 1 --who "station:vllm-qwen3" --reason "serving container" \
+    --owner-pid $$
+```
+
+The lease is then judged by that pid's liveness, exactly like `gozer run`'s: no
+fd needed, no grace window, `CLAIMED` for as long as the supervisor lives, reaped
+once it is gone. A non-positive pid, or one that is not alive at acquire time, is
+refused outright rather than handed back as a lease that would evaporate
+immediately.
+
+This is for supervisors only. If *you* are the process that will open the device,
+you want the plain `acquire` above (or better, `gozer run`) — passing your own pid
+when you are also the workload buys nothing and hides a crash behind a still-live
+shell.
+
 ## When you are queued (exit code 10)
 
 You get a ticket and a position. **Do not spin.** Go do work that does not need

@@ -128,6 +128,13 @@ and roughly what fixing it would take.
 * Hardware spike: does resetting one ASIC perturb a live neighbour's eth links?
 * Fix `tt-hardware-primer`.
 * Revisit per-chip leases if two concurrent tenants proves too few.
+* **Backend-agnostic gozer.** Today the gate *is* the filesystem: locks, fd truth, and a
+  mutex under `GOZER_ROOT`. Floated 2026-08-24 -- factor that behind an interface so the
+  same `acquire`/`release`/`status` surface could sit on top of a durable queue service
+  (`boopdotpng/tt-device-queue`) or Slurm instead of, or alongside, the local gate. The hard
+  part is not the interface: it is that fd truth is a *local* verification, and a remote
+  backend cannot offer it. Anything not filesystem-backed would have to trust its own ledger,
+  which is the property gozer deliberately does not rely on. Not scoped; "maybe one day."
 
 ## Real-use fixes and observability (2026-08-15/16)
 
@@ -164,3 +171,54 @@ spamming the journal, and `Restart=no` stops it from spinning.
 
 All three landed as separate commits, each with its own failing-test-first evidence; full suite
 (217 tests) green throughout.
+
+## Supervisor-held leases: `--owner-pid` (2026-08-16)
+
+**Original request:** a lease taken by something that will not itself open the device --
+`tt-station-agentd` acquires chips, launches a serving container pinned to them, and
+releases when the container stops.
+
+That case breaks the detached-lease design. A detached lease is judged by
+`DETACHED_GRACE_SECONDS` (900s) from `since`, on the assumption that whoever acquired is
+about to open the device and an fd will appear shortly. A root-owned process inside a
+container has `/proc/<pid>/fd` readable only by its owner, so an unprivileged gozer can
+*never* see its fds -- not "not yet", but permanently. The lease would age past the grace
+window and be reaped as `STALE` about fifteen minutes into a perfectly healthy session,
+leaving the chips reading `FREE` while the container kept using them. That is precisely the
+collision gozer exists to prevent, manufactured by gozer itself.
+
+**`gozer acquire --owner-pid N`** passes the supervisor's own pid (long-lived, outside the
+container) through `Keymaster.acquire`'s pre-existing `pid` parameter -- the same one `gozer
+run` uses for its child. The lease is then **not detached**: `Gatekeeper.reconcile` judges it
+by ordinary `pid_alive(N)`, so it stays `CLAIMED` for exactly as long as the supervisor lives,
+no fd and no timer involved. No new state machine, no new reap rule; it reuses the
+non-detached path that already existed and only `gozer run` could reach.
+
+Key decisions:
+
+* **Validated in `cmd_acquire`, before `Keymaster` ever sees it.** A non-positive pid is
+  never a real process; an already-dead pid would mint a lease reapable the instant it was
+  created, which is strictly worse than refusing. Both are refused with `EXIT_UNAVAILABLE`
+  and a message that says why.
+* **Checked against `gk.proc_root`, never the real `/proc`.** Keeps the validation hermetic
+  under the test suite, which fakes a proc tree.
+* **Wired into `cmd_acquire` only, deliberately not `cmd_wait`.** A ticket replayed by `wait`
+  belongs to whoever is waiting *now*, and `wait` never re-derives a `pid` from the ticket it
+  replays -- inheriting a stale supervisor pid recorded on an old ticket would misattribute a
+  fresh grant to a supervisor that may no longer be the one waiting.
+* **The grant output says so.** A supervisor-held grant prints `owner pid N (not detached --
+  held for as long as that pid lives, no grace window)`, so the difference is visible at the
+  point of acquisition rather than only in the docs.
+
+Docs: README's reaping section, the design spec, and both skills. The gatekeeper skill needed
+it most -- an investigator reading a lease with a live pid, no fd, and hours on the clock
+would otherwise diagnose the healthy shape of a supervisor lease as a stale lock.
+
+TDD throughout (`tests/test_owner_pid.py`, 153 lines); full suite 225 tests green. Merged to
+`main` on 2026-08-24 -- the branch sat unmerged for a week while the comparison against
+`boopdotpng/tt-device-queue` (a community durable-queue take on the same problem: HTTP
+service + SQLite + per-card jobs, versus gozer's daemonless fd-truth leases) was written up.
+Ideas from it worth stealing, all of which map onto entries already in `## Known limitations`:
+round-robin fairness across clients, durable dead-card state surviving a restart, and
+refreshing a ticket's queue position so a correctly-polling waiter cannot expire. Also floated:
+making gozer backend-agnostic so a queue like that -- or Slurm -- could sit underneath it.
