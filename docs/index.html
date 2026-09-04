@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gozer Containment Log</title>
+<meta name="description" content="A 47-hour ledger of tt-gozer arbitrating two shared Blackhole boards for seven unrelated agent sessions — who held what, who forgot to hang up, and what gozer reclaimed without anyone asking it to.">
+
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="tt-gozer">
+<meta property="og:title" content="Gozer Containment Log">
+<meta property="og:description" content="47 hours, 2 boards, 7 agent identities, 8 zombie leases reclaimed automatically. tt-gozer's own history.jsonl, read back as a mainframe accounting report.">
+<meta property="og:url" content="https://tsingletarytt.github.io/tt-gozer/">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Gozer Containment Log">
+<meta name="twitter:description" content="47 hours, 2 boards, 7 agent identities, 8 zombie leases reclaimed automatically.">
+
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23060b07'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='19' fill='%2345ff7a' text-anchor='middle'%3E%3E_%3C/text%3E%3C/svg%3E">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=VT323&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<style>
+/* ── Design tokens ─────────────────────────────────────────────────────
+   This page is one thing pretending to be another: a Ghostbusters-style
+   containment log, printed in the visual grammar of a 1970s/80s Unix
+   timesharing accounting report (sar, who, uptime). tt-gozer's own
+   vocabulary already lives half-in that world — "gate", "gatekeeper",
+   "keymaster" are load-bearing Ghostbusters nouns for a hardware lock
+   directory — so the page just finishes the joke instead of inventing one.
+
+   Two hues, deliberately: phosphor green is "normal, system nominal" —
+   every clean release, every identity's base color. Hazard amber is the
+   one alarm state — a lease gozer had to reclaim because nobody hung up
+   the phone. Nothing else gets a third color. That restraint IS the
+   content: this report has exactly one kind of good news and one kind
+   of incident, same as the real ledger it's built from.
+   ------------------------------------------------------------------- */
+:root {
+  --void:         #060b07;   /* the screen behind the glass */
+  --panel:        #0d170f;   /* raised panel / table / card ground */
+  --phosphor:     #45ff7a;   /* primary glow — clean, nominal, "released" */
+  --phosphor-dim: #2e6b42;   /* secondary text, hairlines, muted labels */
+  --hazard:       #ffb100;   /* the one alarm color — "reaped" / ghosts */
+  --hazard-dim:   #7a5710;   /* hazard borders / dim hazard fills */
+}
+
+* { box-sizing: border-box; }
+html { color-scheme: dark; }
+
+body {
+  margin: 0;
+  background: var(--void);
+  color: var(--phosphor);
+  font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .scanlines { animation: drift 11s linear infinite; }
+  .boot-line { animation: type 0s steps(var(--chars, 1)) forwards; animation-duration: calc(var(--chars, 1) * 16ms); animation-delay: var(--delay, 0s); width: 0; overflow: hidden; white-space: nowrap; }
+  .cursor { animation: blink 1s step-end infinite; }
+  .lease.is-live .live-pulse { animation: pulse 1.6s ease-in-out infinite; }
+}
+@keyframes drift   { from { background-position: 0 0; } to { background-position: 0 64px; } }
+@keyframes type    { to { width: 100%; } }
+@keyframes blink   { 50% { opacity: 0; } }
+@keyframes pulse   { 0%, 100% { opacity: .35; } 50% { opacity: 1; } }
+
+/* ── bezel + screen ───────────────────────────────────────────────── */
+.bezel {
+  max-width: 1040px;
+  margin: 0 auto;
+  padding: clamp(10px, 3vw, 28px);
+}
+.screen {
+  position: relative;
+  background: var(--void);
+  border: 1px solid var(--phosphor-dim);
+  border-radius: 10px;
+  box-shadow: 0 0 0 1px #000, 0 0 60px -10px rgba(69,255,122,.18) inset, 0 30px 80px -40px rgba(0,0,0,.8);
+  overflow: hidden;
+}
+.scanlines {
+  position: absolute; inset: 0; pointer-events: none; z-index: 2;
+  background-image: repeating-linear-gradient(to bottom, rgba(0,0,0,0) 0, rgba(0,0,0,0) 2px, rgba(0,0,0,.35) 3px, rgba(0,0,0,0) 4px);
+  mix-blend-mode: multiply;
+}
+.vignette {
+  position: absolute; inset: 0; pointer-events: none; z-index: 3;
+  box-shadow: inset 0 0 140px 40px rgba(0,0,0,.55);
+}
+.report {
+  position: relative; z-index: 1;
+  padding: clamp(20px, 5vw, 56px) clamp(18px, 6vw, 64px) 40px;
+}
+
+/* ── type & structure ─────────────────────────────────────────────── */
+.eyebrow {
+  font-size: .72rem; letter-spacing: .18em; text-transform: uppercase;
+  color: var(--phosphor-dim); margin: 0 0 6px;
+}
+h1.wordmark {
+  font-family: 'VT323', ui-monospace, monospace;
+  font-size: clamp(3.4rem, 13vw, 6.2rem);
+  line-height: .95; margin: 0; letter-spacing: .03em;
+  color: var(--phosphor);
+  text-shadow: 0 0 6px rgba(69,255,122,.55), 0 0 22px rgba(69,255,122,.25);
+  text-wrap: balance;
+}
+.tagline {
+  margin: 6px 0 26px; color: var(--phosphor-dim); font-size: .95rem;
+}
+.tagline em { color: var(--phosphor); font-style: normal; }
+
+.boot {
+  border: 1px dashed var(--phosphor-dim);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin: 0 0 30px;
+  font-size: .82rem;
+  color: var(--phosphor-dim);
+  background: rgba(69,255,122,.03);
+}
+.boot-line { display: block; }
+.boot-line b { color: var(--phosphor); font-weight: 600; }
+.boot-line.quote { color: var(--hazard); }
+
+p.lede { max-width: 62ch; font-size: .98rem; color: #bdf5d2; margin: 0 0 34px; }
+p.lede code { color: var(--phosphor); }
+
+h2.section {
+  font-size: .78rem; letter-spacing: .2em; text-transform: uppercase;
+  color: var(--void); background: var(--phosphor); display: inline-block;
+  padding: 3px 10px; margin: 0 0 6px; border-radius: 3px;
+}
+p.section-note { margin: 0 0 20px; color: var(--phosphor-dim); font-size: .88rem; max-width: 66ch; }
+
+section { margin-bottom: 48px; }
+
+/* ── hero stat grid ───────────────────────────────────────────────── */
+.hero-grid {
+  display: grid; gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  margin-bottom: 16px;
+}
+.stat {
+  border: 1px solid var(--phosphor-dim);
+  border-radius: 6px;
+  padding: 14px 16px;
+  background: var(--panel);
+}
+.stat .n {
+  font-family: 'VT323', monospace;
+  font-size: 2.6rem; line-height: 1;
+  color: var(--phosphor);
+  text-shadow: 0 0 8px rgba(69,255,122,.45);
+  font-variant-numeric: tabular-nums;
+}
+.stat.hazard { border-color: var(--hazard-dim); }
+.stat.hazard .n { color: var(--hazard); text-shadow: 0 0 8px rgba(255,177,0,.5); }
+.stat .l { font-size: .72rem; letter-spacing: .08em; text-transform: uppercase; color: var(--phosphor-dim); margin-top: 4px; }
+
+.pull {
+  border-left: 3px solid var(--hazard);
+  padding: 10px 16px;
+  color: var(--hazard);
+  font-size: 1.02rem;
+  background: rgba(255,177,0,.05);
+  border-radius: 0 6px 6px 0;
+  margin-top: 4px;
+}
+.pull b { font-family: 'VT323', monospace; font-size: 1.3em; }
+
+/* ── roster table ─────────────────────────────────────────────────── */
+.table-wrap { overflow-x: auto; border: 1px solid var(--phosphor-dim); border-radius: 6px; }
+table { width: 100%; border-collapse: collapse; font-size: .86rem; min-width: 640px; }
+thead th {
+  text-align: left; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
+  font-size: .7rem; color: var(--void); background: var(--phosphor);
+  padding: 8px 12px; white-space: nowrap;
+}
+tbody td { padding: 8px 12px; border-top: 1px solid rgba(46,107,66,.4); white-space: nowrap; }
+tbody tr:nth-child(odd) { background: rgba(69,255,122,.03); }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.who-dot { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 8px; vertical-align: middle; }
+.badge {
+  display: inline-block; font-size: .64rem; letter-spacing: .06em; text-transform: uppercase;
+  border: 1px solid var(--hazard); color: var(--hazard); padding: 1px 6px; border-radius: 3px; margin-left: 8px;
+}
+
+/* ── timeline ──────────────────────────────────────────────────────── */
+.tl-wrap { overflow-x: auto; }
+.tl { min-width: 760px; }
+.tl-lane { position: relative; margin-bottom: 22px; }
+.tl-lane .lane-label { font-size: .74rem; color: var(--phosphor-dim); letter-spacing: .06em; text-transform: uppercase; margin-bottom: 6px; }
+.tl-track {
+  position: relative; height: 40px; background: var(--panel);
+  border: 1px solid var(--phosphor-dim); border-radius: 5px; overflow: visible;
+}
+.tick {
+  position: absolute; top: -18px; bottom: -6px; border-left: 1px dashed rgba(46,107,66,.55);
+  font-size: .62rem; color: var(--phosphor-dim); white-space: nowrap; padding-left: 3px;
+}
+.tick.day { border-left: 1px solid var(--phosphor-dim); }
+.lease {
+  position: absolute; top: 5px; bottom: 5px; min-width: 3px;
+  border-radius: 2px; box-shadow: 0 0 4px rgba(0,0,0,.6);
+}
+.lease.is-reaped::after {
+  content: ""; position: absolute; inset: 0; border-radius: 2px;
+  background-image: repeating-linear-gradient(45deg, var(--hazard) 0 5px, transparent 5px 10px);
+  opacity: .65; border: 1px solid var(--hazard);
+}
+.lease.is-live { outline: 1px dashed var(--hazard); outline-offset: 1px; }
+.live-pulse { position: absolute; right: -2px; top: -2px; bottom: -2px; width: 4px; background: var(--hazard); border-radius: 2px; }
+.tl-legend { display: flex; flex-wrap: wrap; gap: 12px 20px; margin-top: 18px; font-size: .76rem; color: var(--phosphor-dim); }
+.tl-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.tl-legend .swatch { width: 11px; height: 11px; border-radius: 2px; display: inline-block; }
+.tl-legend .swatch.reap { background: var(--panel); background-image: repeating-linear-gradient(45deg, var(--hazard) 0 3px, transparent 3px 6px); border: 1px solid var(--hazard); }
+.tl-legend .swatch.live { background: var(--panel); outline: 1px dashed var(--hazard); }
+
+/* ── containment log (incidents) ─────────────────────────────────── */
+.incident {
+  border: 1px solid var(--hazard-dim); border-radius: 6px;
+  padding: 12px 16px; margin-bottom: 10px; background: var(--panel);
+  display: grid; grid-template-columns: auto 1fr auto; gap: 4px 16px; align-items: baseline;
+}
+.incident.headline { border-color: var(--hazard); background: rgba(255,177,0,.06); grid-template-columns: 1fr; padding: 18px 20px; }
+.incident.headline .tag { color: var(--hazard); font-size: .68rem; letter-spacing: .12em; text-transform: uppercase; }
+.incident.headline .n { font-family: 'VT323', monospace; font-size: 3rem; color: var(--hazard); line-height: 1; text-shadow: 0 0 8px rgba(255,177,0,.5); }
+.incident .who { color: var(--phosphor); font-weight: 600; grid-column: 1 / 2; }
+.incident .reason { color: #bdf5d2; grid-column: 1 / -1; font-size: .86rem; }
+.incident .meta { color: var(--phosphor-dim); font-size: .78rem; grid-column: 1 / -1; }
+.incident .dur { color: var(--hazard); font-variant-numeric: tabular-nums; text-align: right; grid-column: 2 / 3; justify-self: end; }
+.incident-note { margin-top: 14px; color: var(--phosphor-dim); font-size: .84rem; max-width: 68ch; }
+
+/* ── footer ───────────────────────────────────────────────────────── */
+footer {
+  border-top: 1px dashed var(--phosphor-dim);
+  padding-top: 20px; margin-top: 12px;
+  font-size: .82rem; color: var(--phosphor-dim);
+}
+footer .shutdown b { color: var(--phosphor); }
+footer .cursor { display: inline-block; width: 9px; height: 15px; background: var(--phosphor); vertical-align: text-bottom; }
+footer a { color: var(--phosphor); }
+footer p { margin: 3px 0; }
+</style>
+</head>
+<body>
+<div class="bezel">
+  <div class="screen">
+    <div class="scanlines"></div>
+    <div class="vignette"></div>
+    <div class="report">
+
+      <p class="eyebrow">Tenstorrent Blackhole · Time-Sharing System</p>
+      <h1 class="wordmark">GOZER</h1>
+      <p class="tagline">Containment Log — report period <em>2026&#8209;09&#8209;03 → 2026&#8209;09&#8209;04</em></p>
+
+      <div class="boot" id="boot">
+        <span class="boot-line" data-text="NODE qb2 · BOARDS 2 · CHIPS 4 · ROOT /tmp/tt-gozer"></span>
+        <span class="boot-line" data-text="WINDOW 2026-09-03T00:24:57Z .. 2026-09-04T23:23:57Z  (46h 59m)"></span>
+        <span class="boot-line" data-text="SOURCE history.jsonl — append-only, does not survive reboot"></span>
+        <span class="boot-line quote" data-text='&quot;Who ya gonna call?&quot; — apparently, gozer.'></span>
+      </div>
+
+      <p class="lede">Two Blackhole boards, four chips, one lock directory. <code>tt-gozer</code> is the
+        thing that stands between whichever agent asks first and whoever's already running —
+        it hands out chip leases, queues the rest, and quietly reclaims anything a dead process
+        left pinned to the hardware. This is its own ledger read back: every grant, release,
+        queue and reap it logged this period, while seven unrelated sessions took turns on the
+        same two boards without a person ever refereeing.</p>
+
+      <section id="hero">
+        <h2 class="section">System Activity</h2>
+        <p class="section-note">Headline counts, straight off the ledger — nothing here is estimated.</p>
+        <div class="hero-grid">
+          <div class="stat"><div class="n">7</div><div class="l">Entities on the line</div></div>
+          <div class="stat"><div class="n">27</div><div class="l">Leases granted</div></div>
+          <div class="stat hazard"><div class="n">8</div><div class="l">Ghosts exorcised</div></div>
+          <div class="stat hazard"><div class="n">22.7h</div><div class="l">Containment time reclaimed</div></div>
+          <div class="stat"><div class="n">1</div><div class="l">Queue event (32s wait)</div></div>
+          <div class="stat"><div class="n">2/4</div><div class="l">Boards / chips shared</div></div>
+        </div>
+        <p class="pull"><b>81.5%</b> of every chip-hour this ledger closed out this period belonged
+          to a session that never called <code>release</code> itself. gozer's grace-window timer
+          called it for them.</p>
+      </section>
+
+      <section id="roster">
+        <h2 class="section">Who's on the Line</h2>
+        <p class="section-note">Seven names shared two boards this period. One of them did nearly
+          all the work; the other six passed through cleanly and were gone in minutes.</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr>
+              <th>Entity</th><th class="num">Sessions</th><th class="num">Clean</th>
+              <th class="num">Ghosts</th><th class="num">Held</th><th class="num">Longest</th>
+            </tr></thead>
+            <tbody id="roster-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="timeline">
+        <h2 class="section">Containment Grid — 47 Hours</h2>
+        <p class="section-note">Board 062 carries chips <code>01</code>/<code>02</code>; board 055
+          carries <code>03</code>/<code>04</code>. Solid bars are clean handoffs. Hazard-striped
+          bars are the ones gozer had to reclaim on its own.</p>
+        <div class="tl-wrap">
+          <div class="tl" id="timeline-root"></div>
+        </div>
+        <div class="tl-legend" id="tl-legend"></div>
+      </section>
+
+      <section id="log">
+        <h2 class="section">Containment Log — Spectral Residue</h2>
+        <p class="section-note">Eight sessions never called it quits. Their owning processes died,
+          detached, or just wandered off — each left a lease pinned to a chip until gozer's own
+          grace-window timer noticed and pulled it. No one ran <code>tt-smi -r</code> by hand.</p>
+        <div id="incidents"></div>
+        <p class="incident-note">The last line above is the fastest exorcism on record — 35 seconds
+          — and it's also the only time in two days anyone had to wait their turn: the very next
+          request queued for 32 seconds while gozer finished clearing the ash, then was granted
+          without anyone touching a keyboard.</p>
+      </section>
+
+      <footer>
+        <div class="shutdown">
+          <p>SPECTRAL ACTIVITY: <b>NOMINAL</b></p>
+          <p>CONTAINMENT INTEGRITY: <b>HELD</b></p>
+          <p>NO OVERRIDES OR MANUAL ADOPTIONS RECORDED THIS PERIOD</p>
+          <p>-- END OF REPORT --</p>
+        </div>
+        <p style="margin-top:14px;">Generated from <code>/tmp/tt-gozer/history.jsonl</code>, compiled
+          2026-09-04. Source: <a href="https://github.com/tsingletaryTT/tt-gozer">github.com/tsingletaryTT/tt-gozer</a>
+          <span class="cursor"></span></p>
+      </footer>
+
+    </div>
+  </div>
+</div>
+
+<script type="application/json" id="gozer-events">
+[{"chips": ["0000:01:00.0", "0000:02:00.0", "0000:03:00.0", "0000:04:00.0"], "detached": true, "dev_indices": [0, 1, 2, 3], "event": "granted", "expanded": false, "lease_id": "5c4049", "pid": 160067, "reason": "V-JEPA2 functional decoder bring-up (multi-session)", "requested": 4, "ts": "2026-09-03T00:24:57Z", "units": ["0000046131924062", "0000046131924055"], "who": "claude:vjepa2-bringup"}, {"chips": ["0000:01:00.0", "0000:02:00.0", "0000:03:00.0", "0000:04:00.0"], "duration_s": 13818.0, "event": "released", "lease_id": "5c4049", "reset_ok": true, "reset_ran": true, "ts": "2026-09-03T04:15:15Z", "who": "claude:vjepa2-bringup"}, {"chips": ["0000:01:00.0", "0000:02:00.0"], "detached": false, "dev_indices": [0, 1], "event": "granted", "expanded": true, "lease_id": "239afe", "pid": 303821, "reason": "start VJEPA2 functional encoder bring-up", "requested": 1, "ts": "2026-09-03T14:42:33Z", "units": ["0000046131924062"], "who": "claude:vjepa2-bringup"}, {"chips": ["0000:01:00.0", "0000:02:00.0"], "duration_s": 42.0, "event": "released", "lease_id": "239afe", "reset_ok": true, "reset_ran": true, "ts": "2026-09-03T14:43:15Z", "who": "claude:vjepa2-bringup"}, {"chips": ["0000:01:00.0", "0000:02:00.0"], "detached": true, "dev_indices": [0, 1], "event": "granted", "expanded": true, "lease_id": "ac1d13", "pid": 303958, "reason": "VJEPA2 encoder block bring-up, iterative", "requested": 1, "ts": "2026-09-03T14:43:15Z", "units": ["0000046131924062"], "who": "claude:vjepa2-bringup"}, {"chips": ["0000:01:00.0", "0000:02:00.0"], "duration_s": 6473.0, "event": "reaped", "lease_id": "ac1d13", "ts": "2026-09-03T16:31:08Z", "who": "claude:vjepa2-bringup", "why": "detached lease past its grace window"}, {"chips": ["0000:03:00.0", "0000:04:00.0"], "detached": true, "dev_indices": [2, 3], "event": "granted", "expanded": true, "lease_id": "29ffb7", "pid": 350753, "reason": "trace-capture restructuring for tighter benchmark", "requested": 1, "ts": "2026-09-03T16:35:54Z", "units": ["0000046131924055"], "who": "claude:vjepa2-bringup"}, {"chips": ["0000:03:00.0", "0000:04:00.0"], "duration_s": 1140.0, "event": "reaped", "lease_id": "29ffb7", "ts": "2026-09-03T16:54:54Z", "who": "claude:vjepa2-bringup", "why": "detached lease past its grace window"}, {"chips": ["0000:01:00.0", "0000:02:00.0"], "detached": true, "dev_indices": [0, 1], "event": "granted", "expanded": true, "lease_id": "af77ae", "pid": 357153, "reason": "bf16 precision optimization pass", "requested": 1, "ts": "2026-09-03T16:54:54Z", "units": ["0000046131924062"], "who": "claude:vjepa2-bringup"}, {"chips": ["0000:01:00.0", "0000:02:00.0"], "duration_s": 1735.0, "event": "reaped", "lease_id": "af77ae", "ts": "2026-09-03T17:23:49Z", "who": "claude:vjepa2-bringup", "why": "detached lease past its grace window"}, {"chips": ["0000:01:00.0", "0000:02:00.0"], "detached": true, "dev_indices": [0, 1], "event": "granted", "expanded": true, "lease_id": "886b1a", "pid": 380239, "reason": "optimize predictor merge (tilize/untilize round-trip)", "requested": 1, "ts": "2026-09-03T17:23:49Z", "units": ["0000046131924062"], "who": "claude:vjepa2-bringup"}, {"chips": ["0000:01:00.0", "0000:02:00.0"], "duration_s": 1372.0, "event": "reaped", "lease_id": "886b1a", "ts": "2026-09-03T17:46:41Z", "who": "claude:vjepa2-bringup", "why": "detached lease past its grace window"}, {"chips": ["0000:01:00.0", "0000:02:00.0"], "detached": true, "dev_indices": [0, 1], "event": "granted", "expanded": true, "lease_id": "6d8e62", "pid": 394540, "reason": "verify fused nlp_create_qkv_heads/nlp_concat_heads before wiring in", "requested": 1, "ts": "2026-09-03T17:46:41Z", "units": ["0000046131924062"], "who": "claude:vjepa2-bringup"}, {"chips": ["0000:01:00.0", "0000:02:00.0"], "duration_s": 381.0, "event": "released", "lease_id": "6d8e62", "reset_ok": true, "reset_ran": true, "ts": "2026-09-03T17:53:02Z", "who": "claude:vjepa2-bringup"}, {"chips": ["0000:01:00.0", "0000:02:00.0"], "detached": true, "dev_indices": [0, 1], "event": "granted", "expanded": true, "lease_id": "390e8c", "pid": 402684, "reason": "verify rotary_embedding_llama matches our rotate_half convention", "requested": 1, "ts": "2026-09-03T17:56:44Z", "units": ["0000046131924062"], "who": "claude:vjepa2-bringup"}, {"chips": ["0000:01:00.0", "0000:02:00.0"], "duration_s": 718.0, "event": "released", "lease_id": "390e8c", "reset_ok": true, "reset_ran": true, "ts": "2026-09-03T18:08:42Z", "who": "claude:vjepa2-bringup"}, {"chips": ["0000:01:00.0", "0000:02:00.0"], "detached": true, "dev_indices": [0, 1], "event": "granted", "expanded": false, "lease_id": "c10782", "pid": 418741, "reason": "verify published repo path-bootstrap fixes before push", "requested": 2, "ts": "2026-09-03T18:32:59Z", "units": ["0000046131924062"], "who": "claude:vjepa2-bringup"}, {"chips": ["0000:01:00.0", "0000:02:00.0"], "duration_s": 125.0, "event": "released", "lease_id": "c10782", "reset_ok": true, "reset_ran": true, "ts": "2026-09-03T18:35:04Z", "who": "claude:vjepa2-bringup"}, {"chips": ["0000:01:00.0", "0000:02:00.0"], "detached": true, "dev_indices": [0, 1], "event": "granted", "expanded": false, "lease_id": "c7a20f", "pid": 443031, "reason": "test gradio demo app against TTNN backend", "requested": 2, "ts": "2026-09-03T19:52:31Z", "units": ["0000046131924062"], "who": "claude:vjepa2-bringup"}, {"chips": ["0000:01:00.0", "0000:02:00.0"], "duration_s": 225.0, "event": "released", "lease_id": "c7a20f", "reset_ok": true, "reset_ran": true, "ts": "2026-09-03T19:56:16Z", "who": "claude:vjepa2-bringup"}, {"chips": ["0000:01:00.0", "0000:02:00.0"], "detached": true, "dev_indices": [0, 1], "event": "granted", "expanded": false, "lease_id": "d35fb2", "pid": 452729, "reason": "reopen gradio demo in firefox for the user", "requested": 2, "ts": "2026-09-03T19:58:16Z", "units": ["0000046131924062"], "who": "claude:vjepa2-bringup"}, {"chips": ["0000:01:00.0", "0000:02:00.0"], "duration_s": 11248.0, "event": "reaped", "lease_id": "d35fb2", "ts": "2026-09-03T23:05:44Z", "who": "claude:vjepa2-bringup", "why": "detached lease past its grace window"}, {"chips": ["0000:01:00.0", "0000:02:00.0"], "detached": true, "dev_indices": [0, 1], "event": "granted", "expanded": false, "lease_id": "366ba9", "pid": 613309, "reason": "reset chips after two OOM crashes, retry trimmed show", "requested": 2, "ts": "2026-09-03T23:05:50Z", "units": ["0000046131924062"], "who": "claude:vjepa2-bringup"}, {"chips": ["0000:01:00.0", "0000:02:00.0"], "duration_s": 1269.0, "event": "released", "lease_id": "366ba9", "reset_ok": true, "reset_ran": true, "ts": "2026-09-03T23:26:59Z", "who": "claude:vjepa2-bringup"}, {"chips": ["0000:01:00.0", "0000:02:00.0"], "detached": true, "dev_indices": [0, 1], "event": "granted", "expanded": false, "lease_id": "dbac61", "pid": 621769, "reason": "retest show: fixed letter plane/camera + segment looping", "requested": 2, "ts": "2026-09-03T23:27:00Z", "units": ["0000046131924062"], "who": "claude:vjepa2-bringup"}, {"chips": ["0000:01:00.0", "0000:02:00.0"], "duration_s": 1005.0, "event": "released", "lease_id": "dbac61", "reset_ok": true, "reset_ran": true, "ts": "2026-09-03T23:43:45Z", "who": "claude:vjepa2-bringup"}, {"chips": ["0000:01:00.0", "0000:02:00.0"], "detached": true, "dev_indices": [0, 1], "event": "granted", "expanded": false, "lease_id": "8ba052", "pid": 630549, "reason": "test new multi-dancer staging architecture", "requested": 2, "ts": "2026-09-03T23:43:45Z", "units": ["0000046131924062"], "who": "claude:vjepa2-bringup"}, {"chips": ["0000:03:00.0", "0000:04:00.0"], "detached": false, "dev_indices": [2, 3], "event": "granted", "expanded": true, "lease_id": "61c1cb", "pid": 706608, "reason": "verify TT_VISIBLE_DEVICES injection for manifest launch command", "requested": 1, "ts": "2026-09-04T03:18:44Z", "units": ["0000046131924055"], "who": "claude:tt-disco-setup"}, {"chips": ["0000:03:00.0", "0000:04:00.0"], "duration_s": 41.0, "event": "released", "lease_id": "61c1cb", "reset_ok": true, "reset_ran": true, "ts": "2026-09-04T03:19:25Z", "who": "claude:tt-disco-setup"}, {"chips": ["0000:03:00.0", "0000:04:00.0"], "detached": false, "dev_indices": [2, 3], "event": "granted", "expanded": true, "lease_id": "af0642", "pid": 707224, "reason": "gradio demo", "requested": 1, "ts": "2026-09-04T03:22:47Z", "units": ["0000046131924055"], "who": "disco:animatediff"}, {"chips": ["0000:03:00.0", "0000:04:00.0"], "duration_s": 1.0, "event": "released", "lease_id": "af0642", "reset_ok": false, "reset_ran": true, "ts": "2026-09-04T03:22:48Z", "who": "disco:animatediff"}, {"chips": ["0000:03:00.0", "0000:04:00.0"], "detached": false, "dev_indices": [2, 3], "event": "granted", "expanded": true, "lease_id": "5da82c", "pid": 707315, "reason": "gradio demo", "requested": 1, "ts": "2026-09-04T03:23:09Z", "units": ["0000046131924055"], "who": "disco:vjepa2"}, {"chips": ["0000:03:00.0", "0000:04:00.0"], "duration_s": 62.0, "event": "released", "lease_id": "5da82c", "reset_ok": false, "reset_ran": true, "ts": "2026-09-04T03:24:11Z", "who": "disco:vjepa2"}, {"chips": ["0000:03:00.0", "0000:04:00.0"], "detached": false, "dev_indices": [2, 3], "event": "granted", "expanded": true, "lease_id": "774973", "pid": 707628, "reason": "gradio demo", "requested": 1, "ts": "2026-09-04T03:24:31Z", "units": ["0000046131924055"], "who": "disco:vjepa2"}, {"chips": ["0000:03:00.0", "0000:04:00.0"], "duration_s": 36.0, "event": "released", "lease_id": "774973", "reset_ok": false, "reset_ran": true, "ts": "2026-09-04T03:25:07Z", "who": "disco:vjepa2"}, {"chips": ["0000:03:00.0", "0000:04:00.0"], "detached": false, "dev_indices": [2, 3], "event": "granted", "expanded": true, "lease_id": "131b25", "pid": 734993, "reason": "gradio demo", "requested": 1, "ts": "2026-09-04T15:44:24Z", "units": ["0000046131924055"], "who": "disco:animatediff"}, {"chips": ["0000:03:00.0", "0000:04:00.0"], "duration_s": 1.0, "event": "released", "lease_id": "131b25", "reset_ok": false, "reset_ran": true, "ts": "2026-09-04T15:44:25Z", "who": "disco:animatediff"}, {"chips": ["0000:01:00.0", "0000:02:00.0"], "duration_s": 57800.0, "event": "reaped", "lease_id": "8ba052", "ts": "2026-09-04T15:47:05Z", "who": "claude:vjepa2-bringup", "why": "detached lease past its grace window"}, {"chips": ["0000:01:00.0", "0000:02:00.0"], "detached": false, "dev_indices": [0, 1], "event": "granted", "expanded": true, "lease_id": "89a672", "pid": 736077, "reason": "gradio demo", "requested": 1, "ts": "2026-09-04T15:48:54Z", "units": ["0000046131924062"], "who": "disco:animatediff"}, {"chips": ["0000:03:00.0", "0000:04:00.0"], "detached": false, "dev_indices": [2, 3], "event": "granted", "expanded": true, "lease_id": "06820b", "pid": 736817, "reason": "gradio demo", "requested": 1, "ts": "2026-09-04T15:49:40Z", "units": ["0000046131924055"], "who": "disco:vjepa2"}, {"chips": ["0000:01:00.0", "0000:02:00.0"], "duration_s": 294.0, "event": "released", "lease_id": "89a672", "reset_ok": false, "reset_ran": true, "ts": "2026-09-04T15:53:48Z", "who": "disco:animatediff"}, {"chips": ["0000:03:00.0", "0000:04:00.0"], "duration_s": 249.0, "event": "released", "lease_id": "06820b", "reset_ok": false, "reset_ran": true, "ts": "2026-09-04T15:53:49Z", "who": "disco:vjepa2"}, {"chips": ["0000:01:00.0", "0000:02:00.0"], "detached": false, "dev_indices": [0, 1], "event": "granted", "expanded": true, "lease_id": "5fbab9", "pid": 795554, "reason": "serve tt-animatediff ASGI app via the tt-model-manager launcher command", "requested": 1, "ts": "2026-09-04T16:36:44Z", "units": ["0000046131924062"], "who": "claude:gozer-keymaster"}, {"chips": ["0000:01:00.0", "0000:02:00.0"], "duration_s": 276.0, "event": "released", "lease_id": "5fbab9", "reset_ok": true, "reset_ran": true, "ts": "2026-09-04T16:41:20Z", "who": "claude:gozer-keymaster"}, {"chips": ["0000:01:00.0", "0000:02:00.0"], "detached": false, "dev_indices": [0, 1], "event": "granted", "expanded": true, "lease_id": "d68fc4", "pid": 869789, "reason": "live smoke test of chrome/particle/audio show upgrade", "requested": 1, "ts": "2026-09-04T22:49:16Z", "units": ["0000046131924062"], "who": "claude:vjepa2-dance-upgrade"}, {"chips": ["0000:03:00.0", "0000:04:00.0"], "detached": false, "dev_indices": [2, 3], "event": "granted", "expanded": true, "lease_id": "6b1254", "pid": 903237, "reason": "serve tt-tnt v6 thin bundle (1-chip, episod/tt-tnt) to verify the staged v6 packaging works end to end", "requested": 1, "ts": "2026-09-04T23:18:16Z", "units": ["0000046131924055"], "who": "claude:tt-tnt-v6-verify"}, {"chips": ["0000:03:00.0", "0000:04:00.0"], "duration_s": 41.0, "event": "released", "lease_id": "6b1254", "reset_ok": true, "reset_ran": true, "ts": "2026-09-04T23:18:57Z", "who": "claude:tt-tnt-v6-verify"}, {"chips": ["0000:03:00.0", "0000:04:00.0"], "detached": false, "dev_indices": [2, 3], "event": "granted", "expanded": true, "lease_id": "c6988e", "pid": 903682, "reason": "serve tt-tnt v6 thin bundle for hardware verification", "requested": 1, "ts": "2026-09-04T23:19:37Z", "units": ["0000046131924055"], "who": "claude:tt-tnt-v6-verify"}, {"chips": ["0000:03:00.0", "0000:04:00.0"], "duration_s": 35.0, "event": "reaped", "lease_id": "c6988e", "ts": "2026-09-04T23:20:12Z", "who": "claude:tt-tnt-v6-verify", "why": "owning process is dead"}, {"event": "queued", "max_chips": 1, "min_chips": 1, "ticket": "1b01", "ts": "2026-09-04T23:20:12Z", "who": "claude:tt-tnt-v6-verify"}, {"chips": ["0000:03:00.0", "0000:04:00.0"], "detached": true, "dev_indices": [2, 3], "event": "granted", "expanded": true, "lease_id": "46f7ce", "pid": 904235, "reason": "serve tt-tnt v6 thin bundle for hardware verification", "requested": 1, "ts": "2026-09-04T23:20:44Z", "units": ["0000046131924055"], "who": "claude:tt-tnt-v6-verify"}, {"chips": ["0000:01:00.0", "0000:02:00.0"], "duration_s": 2051.0, "event": "reaped", "lease_id": "d68fc4", "ts": "2026-09-04T23:23:27Z", "who": "claude:vjepa2-dance-upgrade", "why": "owning process is dead"}, {"chips": ["0000:01:00.0", "0000:02:00.0"], "detached": false, "dev_indices": [0, 1], "event": "granted", "expanded": true, "lease_id": "147bdd", "pid": 905660, "reason": "live smoke test of pane-grid redesign", "requested": 1, "ts": "2026-09-04T23:23:57Z", "units": ["0000046131924062"], "who": "claude:vjepa2-dance-upgrade"}]
+</script>
+
+<script>
+(function () {
+  var reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // boot banner typewriter
+  var delay = 0;
+  document.querySelectorAll('.boot-line').forEach(function (el, i) {
+    var text = el.getAttribute('data-text');
+    el.textContent = text;
+    if (reduced) return;
+    el.style.setProperty('--chars', String(text.length));
+    el.style.setProperty('--delay', (delay) + 'ms');
+    delay += text.length * 16 + 220;
+  });
+
+  // ── roster (hardcoded from the verified ledger, not re-derived here) ──
+  var PALETTE = {
+    'claude:vjepa2-bringup':       '#45ff7a',
+    'claude:vjepa2-dance-upgrade': '#8dffb0',
+    'disco:vjepa2':                '#31c866',
+    'disco:animatediff':           '#7fe6a0',
+    'claude:gozer-keymaster':      '#1f9c50',
+    'claude:tt-tnt-v6-verify':     '#b7ffce',
+    'claude:tt-disco-setup':       '#3fae66'
+  };
+  var ROSTER = [
+    { who: 'claude:vjepa2-bringup',       sessions: 14, clean: 8, ghosts: 6, held: '27.04h', longest: '16.06h', active: false },
+    { who: 'claude:vjepa2-dance-upgrade', sessions: 2,  clean: 0, ghosts: 1, held: '0.57h',  longest: '0.57h',  active: true  },
+    { who: 'disco:vjepa2',                sessions: 3,  clean: 3, ghosts: 0, held: '0.10h',  longest: '0.07h',  active: false },
+    { who: 'disco:animatediff',           sessions: 3,  clean: 3, ghosts: 0, held: '0.08h',  longest: '0.08h',  active: false },
+    { who: 'claude:gozer-keymaster',      sessions: 1,  clean: 1, ghosts: 0, held: '0.08h',  longest: '0.08h',  active: false },
+    { who: 'claude:tt-tnt-v6-verify',     sessions: 3,  clean: 1, ghosts: 1, held: '0.02h',  longest: '0.01h',  active: true  },
+    { who: 'claude:tt-disco-setup',       sessions: 1,  clean: 1, ghosts: 0, held: '0.01h',  longest: '0.01h',  active: false }
+  ];
+  var rosterBody = document.getElementById('roster-body');
+  ROSTER.forEach(function (r) {
+    var tr = document.createElement('tr');
+    tr.innerHTML =
+      '<td><span class="who-dot" style="background:' + PALETTE[r.who] + '"></span>' + r.who +
+        (r.active ? '<span class="badge">active</span>' : '') + '</td>' +
+      '<td class="num">' + r.sessions + '</td>' +
+      '<td class="num">' + r.clean + '</td>' +
+      '<td class="num">' + r.ghosts + '</td>' +
+      '<td class="num">' + r.held + '</td>' +
+      '<td class="num">' + r.longest + '</td>';
+    rosterBody.appendChild(tr);
+  });
+
+  // ── timeline, built live from the embedded ledger ──
+  var events = JSON.parse(document.getElementById('gozer-events').textContent);
+  var UNIT_LANE = { '0000046131924062': 0, '0000046131924055': 1 };
+  var LANE_LABEL = ['BOARD 062 — chips 01 / 02', 'BOARD 055 — chips 03 / 04'];
+
+  var logStart = new Date(events[0].ts);
+  var logEnd = new Date(events[events.length - 1].ts);
+  var totalMs = logEnd - logStart;
+
+  var open = {};
+  var segs = [[], []];
+  events.forEach(function (e) {
+    if (e.event === 'granted') {
+      open[e.lease_id] = e;
+    } else if (e.event === 'released' || e.event === 'reaped') {
+      var g = open[e.lease_id];
+      if (!g) return;
+      (g.units || []).forEach(function (u) {
+        var lane = UNIT_LANE[u];
+        if (lane === undefined) return;
+        segs[lane].push({ who: g.who, start: new Date(g.ts), end: new Date(e.ts), ended: e.event, reason: g.reason });
+      });
+      delete open[e.lease_id];
+    }
+  });
+  Object.keys(open).forEach(function (lid) {
+    var g = open[lid];
+    (g.units || []).forEach(function (u) {
+      var lane = UNIT_LANE[u];
+      if (lane === undefined) return;
+      segs[lane].push({ who: g.who, start: new Date(g.ts), end: logEnd, ended: 'open', reason: g.reason });
+    });
+  });
+
+  var root = document.getElementById('timeline-root');
+  for (var lane = 0; lane < 2; lane++) {
+    var laneEl = document.createElement('div');
+    laneEl.className = 'tl-lane';
+    var label = document.createElement('div');
+    label.className = 'lane-label';
+    label.textContent = LANE_LABEL[lane];
+    laneEl.appendChild(label);
+
+    var track = document.createElement('div');
+    track.className = 'tl-track';
+
+    // hour ticks, every 6h from logStart
+    var t0 = new Date(logStart); t0.setUTCMinutes(0, 0, 0);
+    while (t0.getUTCHours() % 6 !== 0) t0.setUTCHours(t0.getUTCHours() + 1);
+    for (var t = new Date(t0); t <= logEnd; t.setUTCHours(t.getUTCHours() + 6)) {
+      if (t < logStart) continue;
+      var pct = (t - logStart) / totalMs * 100;
+      var tick = document.createElement('div');
+      tick.className = 'tick' + (t.getUTCHours() === 0 ? ' day' : '');
+      tick.style.left = pct + '%';
+      tick.textContent = t.toISOString().slice(5, 16).replace('T', ' ') + 'Z';
+      track.appendChild(tick);
+    }
+
+    segs[lane].forEach(function (s) {
+      var left = (s.start - logStart) / totalMs * 100;
+      var width = Math.max((s.end - s.start) / totalMs * 100, 0.35);
+      var el = document.createElement('div');
+      el.className = 'lease' + (s.ended === 'reaped' ? ' is-reaped' : '') + (s.ended === 'open' ? ' is-live' : '');
+      el.style.left = left + '%';
+      el.style.width = width + '%';
+      el.style.background = PALETTE[s.who] || '#3fae66';
+      el.title = s.who + ' — ' + s.reason + ' (' + s.ended + ')';
+      if (s.ended === 'open') {
+        var pulse = document.createElement('div');
+        pulse.className = 'live-pulse';
+        el.appendChild(pulse);
+      }
+      track.appendChild(el);
+    });
+
+    laneEl.appendChild(track);
+    root.appendChild(laneEl);
+  }
+
+  var legend = document.getElementById('tl-legend');
+  Object.keys(PALETTE).forEach(function (who) {
+    var span = document.createElement('span');
+    span.innerHTML = '<span class="swatch" style="background:' + PALETTE[who] + '"></span>' + who;
+    legend.appendChild(span);
+  });
+  [['reap', 'reclaimed by gozer'], ['live', 'active now']].forEach(function (pair) {
+    var span = document.createElement('span');
+    span.innerHTML = '<span class="swatch ' + pair[0] + '"></span>' + pair[1];
+    legend.appendChild(span);
+  });
+
+  // ── containment log incidents, built live from the same ledger ──
+  var reaped = [];
+  var open2 = {};
+  events.forEach(function (e) {
+    if (e.event === 'granted') open2[e.lease_id] = e;
+    else if (e.event === 'reaped') {
+      var g = open2[e.lease_id];
+      reaped.push({ who: e.who, reason: g ? g.reason : '(unknown)', chips: e.chips, duration_s: e.duration_s, why: e.why, ts: e.ts });
+      delete open2[e.lease_id];
+    } else if (e.event === 'released') delete open2[e.lease_id];
+  });
+  reaped.sort(function (a, b) { return b.duration_s - a.duration_s; });
+
+  function fmtDur(s) {
+    if (s < 60) return Math.round(s) + 's';
+    var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+    return h > 0 ? (h + 'h ' + String(m).padStart(2, '0') + 'm') : (m + 'm');
+  }
+  var incidents = document.getElementById('incidents');
+  reaped.forEach(function (r, i) {
+    var el = document.createElement('div');
+    el.className = 'incident' + (i === 0 ? ' headline' : '');
+    if (i === 0) {
+      el.innerHTML =
+        '<div class="tag">Headline Incident — longest containment</div>' +
+        '<div class="n">' + fmtDur(r.duration_s) + '</div>' +
+        '<div class="who">' + r.who + '</div>' +
+        '<div class="reason">&ldquo;' + r.reason + '&rdquo; — chips ' + r.chips.join(', ') + '</div>' +
+        '<div class="meta">granted, then abandoned, then reclaimed ' + r.ts + ' — reason: ' + r.why + '</div>';
+    } else {
+      el.innerHTML =
+        '<div class="who">' + r.who + '</div>' +
+        '<div class="dur">' + fmtDur(r.duration_s) + '</div>' +
+        '<div class="reason">&ldquo;' + r.reason + '&rdquo;</div>' +
+        '<div class="meta">chips ' + r.chips.join(', ') + ' · reclaimed ' + r.ts + ' · ' + r.why + '</div>';
+    }
+    incidents.appendChild(el);
+  });
+})();
+</script>
+</body>
+</html>
