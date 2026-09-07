@@ -12,7 +12,7 @@ import os
 import sys
 import time
 
-from gozer import __version__, history, procfd
+from gozer import __version__, history, procfd, report
 from gozer.gatekeeper import Gatekeeper
 from gozer.keymaster import Grant, Keymaster, TicketNotFound, parse_duration
 from gozer.topology import TopologyError
@@ -405,6 +405,36 @@ def cmd_history(args) -> int:
     return EXIT_OK
 
 
+def cmd_report(args) -> int:
+    gk, _ = _make(args)
+    records = history.read(gk.root)
+    if not records:
+        print("gozer report: no history yet -- nothing to report on", file=sys.stderr)
+        return EXIT_UNAVAILABLE
+
+    stats = report.compute_stats(records)
+    if args.json:
+        print(jsonlib.dumps(stats))
+        return EXIT_OK
+
+    html = report.render(records, source_note=gk.root)
+    out_path = args.out or os.path.join(_repo_root(), "docs", "index.html")
+    with open(out_path, "w") as f:
+        f.write(html)
+    print(f"gozer report: wrote {out_path}")
+    return EXIT_OK
+
+
+def _repo_root() -> str:
+    try:
+        import subprocess
+        return subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"], capture_output=True,
+            text=True, check=True).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return os.getcwd()
+
+
 def cmd_run(args) -> int:
     _, km = _make(args)
     if not args.command:
@@ -501,6 +531,11 @@ def build_parser() -> argparse.ArgumentParser:
                                     "for how long")
     h.add_argument("-n", type=int, default=20,
                    help="how many recent events to show (default 20)")
+
+    rp = add("report", cmd_report, "regenerate the containment-log page "
+                                   "(docs/index.html) from history.jsonl")
+    rp.add_argument("--out", default=None,
+                    help="output path (default: docs/index.html at the repo root)")
 
     rn = add("run", cmd_run, "acquire, run a command, always release")
     rn.add_argument("--chips", default="1")

@@ -222,3 +222,40 @@ Ideas from it worth stealing, all of which map onto entries already in `## Known
 round-robin fairness across clients, durable dead-card state surviving a restart, and
 refreshing a ticket's queue position so a correctly-polling waiter cannot expire. Also floated:
 making gozer backend-agnostic so a queue like that -- or Slurm -- could sit underneath it.
+
+## `gozer report`: the containment log becomes a computed feature (2026-09-07)
+
+**Original request:** the GH Pages microsite (`e49b72e`) only covered 2026-09-03/04 and hadn't
+been refreshed since; bring it up to date, and make usage reporting "part of the fabric" rather
+than a transient `/tmp` artifact someone regenerates by hand.
+
+Turned out the page was less "static" than it looked: the timeline and incident log were already
+computed client-side JS from an embedded event blob, but the roster table, hero stats (entity
+counts, ghost counts, reclaimed hours), palette, board/lane labels, and most of the prose had all
+been hand-typed by whoever built the page on 2026-09-04. Regenerating it without fixing that would
+just mean repeating the same manual transcription next week.
+
+**New `gozer/report.py`** computes everything that used to be typed in by hand, purely from a
+`history.read()` event list: per-identity roster stats (sessions/clean/ghosts/held-time/longest/
+still-active), hero numbers, a stable per-identity color (hashed into a small green-shade
+palette so re-runs don't reshuffle colors), and a unit-to-chips board map *recovered from the
+data itself* -- single-unit events carry both `units` and `chips` together, so folding those
+pairs across the log reconstructs "board X has chips A/B" without hardcoding PCI addresses or
+board serials for one particular box. `gozer/report_template.html` is the original hand-authored
+page with every hand-typed number/palette/mapping/prose-block replaced by a `{{TOKEN}}`; the CSS
+and the client-side timeline/incident JS are untouched -- widening the embedded event list was
+enough for them to pick up the wider window on their own.
+
+**New CLI verb `gozer report [--out PATH] [--json]`** — reads history, never touches hardware.
+Default output is `docs/index.html` at the repo root (found via `git rev-parse --show-toplevel`).
+`--json` prints the computed stats without rendering HTML. Refuses (`EXIT_UNAVAILABLE`) on an
+empty log rather than rendering a page with no data.
+
+Deliberately **not** wired into the `contrib/gozer-reconcile` systemd timer or any other
+automatic path -- publishing means a git commit, and a timer silently committing to the repo is a
+much bigger claim than "reconcile stale leases." Regeneration stays a manual, reviewed step:
+`gozer report && git commit docs/index.html`.
+
+TDD throughout (`tests/test_report.py`, plus CLI-level tests in `tests/test_cli.py`); full suite
+241 tests green. Version bumped to 0.3.0. `docs/index.html` regenerated against the live
+2026-09-03..09-07 log (145 events, 9 identities) as part of the same change.

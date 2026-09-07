@@ -124,8 +124,15 @@ $ gozer history -n 5
 | `env <lease>` | print export lines for a lease |
 | `run --chips N -- <command>` | acquire, run a command, always release |
 | `history` [`-n N`] [`--json`] | who held what, when, for how long -- the last 20 events by default |
+| `report` [`--out PATH`] [`--json`] | regenerate the GH Pages containment-log page from `history.jsonl` |
 
 Every command also accepts `--json` for machine-readable output.
+
+`gozer report` turns the whole history log into `docs/index.html` -- the published
+"Containment Log" microsite -- recomputing every roster stat, hero number, and board/chip
+mapping from the live log instead of anyone hand-typing them. It never touches hardware; run it
+and commit `docs/index.html` whenever you want the published page current. `--json` prints the
+same computed stats without rendering HTML, for scripting.
 
 ## For agents
 

@@ -546,3 +546,33 @@ def test_history_is_newest_last(env, capsys):
     code, out = run(["history", "--json"], capsys)
     events = json.loads(out)["history"]
     assert events[-1]["who"] == "claude:b"
+
+
+def test_report_json_emits_computed_stats(env, capsys, tmp_path):
+    _, acq_out = run(["acquire", "--chips", "1", "--who", "claude:x", "--json"], capsys)
+    lease_id = json.loads(acq_out)["lease_id"]
+    run(["release", lease_id], capsys)
+
+    code, out = run(["report", "--json"], capsys)
+    assert code == 0
+    data = json.loads(out)
+    assert data["hero"]["entities"] == 1
+    assert data["hero"]["grants"] == 1
+
+
+def test_report_writes_html_to_out_path(env, capsys, tmp_path):
+    _, acq_out = run(["acquire", "--chips", "1", "--who", "claude:x", "--json"], capsys)
+    lease_id = json.loads(acq_out)["lease_id"]
+    run(["release", lease_id], capsys)
+
+    out_path = tmp_path / "report.html"
+    code, _ = run(["report", "--out", str(out_path)], capsys)
+    assert code == 0
+    html = out_path.read_text()
+    assert "claude:x" in html
+    assert "{{" not in html
+
+
+def test_report_refuses_when_history_is_empty(env, capsys):
+    code, out = run(["report", "--json"], capsys)
+    assert code == 12  # EXIT_UNAVAILABLE
