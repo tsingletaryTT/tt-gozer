@@ -30,6 +30,38 @@ _PALETTE_COLORS = [
 
 _TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), "report_template.html")
 
+# Ordered (label, keywords) pairs -- first match wins. This is what stands
+# between the published page and leaking the literal --reason text of every
+# lease this box has ever taken, which can carry internal project names,
+# codenames, or task specifics that have no business on a public GH Pages
+# site. The report should be able to say "a lot of this box's time went to
+# verification work" without saying what was being verified.
+_REASON_THEMES = [
+    ("serving a demo", ("gradio", "demo", "serve", "asgi", "container")),
+    ("verification / testing", ("verify", "verif", "test", "tdd", "sanity", "suite", "confirm", "check")),
+    ("debugging", ("debug", "trace", "offending", "diff", "fix")),
+    ("benchmarking / optimization", ("benchmark", "optimiz", "throughput", "precision", "measure")),
+    ("bring-up", ("bring-up", "bringup")),
+    ("build / packaging", ("build", "dockerfile", "packag", "rebuild")),
+    ("exploration", ("explore", "plan")),
+]
+
+
+def theme_for_reason(reason: str | None) -> str:
+    """Map a free-text --reason string to a small, public-safe theme label.
+
+    Order matters: the first matching theme wins, so more specific themes
+    (e.g. "serving a demo") are checked before broader ones that might also
+    match the same words.
+    """
+    if not reason:
+        return "general work"
+    lowered = reason.lower()
+    for label, keywords in _REASON_THEMES:
+        if any(kw in lowered for kw in keywords):
+            return label
+    return "general work"
+
 
 def compute_stats(events: list[dict]) -> dict:
     """Compute every number the report needs from a raw event list.
@@ -139,6 +171,22 @@ def _fmt_dur(seconds: float) -> str:
     h, rem = divmod(int(seconds), 3600)
     m = rem // 60
     return f"{h}h {m:02d}m" if h else f"{m}m"
+
+
+def _redact_reasons(events: list[dict]) -> list[dict]:
+    """Replace each event's free-text `reason` with its theme.
+
+    This is the only thing that reaches the published page's embedded JSON
+    (and therefore the timeline tooltips and incident cards the client-side
+    JS builds from it) -- everything else in an event (who, chips, units,
+    timestamps, durations) is operational metadata, not prompt content.
+    """
+    redacted = []
+    for e in events:
+        if "reason" in e:
+            e = {**e, "reason": theme_for_reason(e["reason"])}
+        redacted.append(e)
+    return redacted
 
 
 def render(events: list[dict], *, source_note: str | None = None) -> str:
@@ -263,7 +311,7 @@ def render(events: list[dict], *, source_note: str | None = None) -> str:
         "{{COMPILED_DATE}}": end[:10],
         "{{META_DESCRIPTION}}": meta_description,
         "{{META_OG_DESCRIPTION}}": meta_og,
-        "{{EVENTS_JSON}}": json.dumps(events),
+        "{{EVENTS_JSON}}": json.dumps(_redact_reasons(events)),
         "{{PALETTE_JSON}}": json.dumps(palette),
         "{{ROSTER_JSON}}": json.dumps(roster_rows),
         "{{UNIT_LANE_JSON}}": json.dumps(unit_lane),

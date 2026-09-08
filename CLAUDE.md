@@ -259,3 +259,25 @@ much bigger claim than "reconcile stale leases." Regeneration stays a manual, re
 TDD throughout (`tests/test_report.py`, plus CLI-level tests in `tests/test_cli.py`); full suite
 241 tests green. Version bumped to 0.3.0. `docs/index.html` regenerated against the live
 2026-09-03..09-07 log (145 events, 9 identities) as part of the same change.
+
+## `gozer report` stops leaking raw --reason text (2026-09-08)
+
+**Original request:** "update it again. let's leak less our specific prompts but instead note
+the theme of them too; revise previous." The published page's embedded event JSON carried every
+lease's literal `--reason` string verbatim -- e.g. "V-JEPA2 functional decoder bring-up
+(multi-session)", "verify rotary_embedding_llama matches our rotate_half convention" -- which is
+effectively the task prompt/context for whatever internal project was running, sitting in public
+page source.
+
+New `gozer.report.theme_for_reason()`: an ordered keyword match against a small set of public-safe
+labels (serving a demo, verification / testing, debugging, benchmarking / optimization, bring-up,
+build / packaging, exploration, general work). `render()` now redacts every event's `reason`
+through this before embedding the event list in the page's JSON blob -- the one thing the
+client-side timeline tooltips and incident cards read from, so the fix lands in exactly the place
+the leak was reaching the page. `who` identities (e.g. `claude:vjepa2-bringup`) are left alone --
+that's the roster's whole point ("who's on the line"), and the request was specifically about
+prompt/reason text, not operator identity.
+
+`docs/index.html` regenerated against the current live log with themed reasons throughout.
+TDD (`TestThemeForReason`, `TestRenderRedactsReasons` in `tests/test_report.py`); full suite 251
+tests green. Version bumped to 0.3.1.

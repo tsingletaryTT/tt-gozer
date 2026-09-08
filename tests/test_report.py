@@ -120,14 +120,15 @@ class TestAssignPalette:
 
 
 class TestRender:
-    def test_render_embeds_full_event_list(self):
+    def test_render_embeds_every_event_with_theme_in_place_of_reason(self):
         from gozer import report
 
         html = report.render(_events())
         start = html.index('<script type="application/json" id="gozer-events">')
         end = html.index("</script>", start)
-        blob = html[start:end].split(">", 1)[1]
-        assert json.loads(blob) == _events()
+        blob = json.loads(html[start:end].split(">", 1)[1])
+        assert len(blob) == len(_events())
+        assert [e.get("lease_id") for e in blob] == [e.get("lease_id") for e in _events()]
 
     def test_render_contains_computed_hero_numbers(self):
         from gozer import report
@@ -141,3 +142,71 @@ class TestRender:
 
         with pytest.raises(ValueError):
             report.render([])
+
+
+class TestThemeForReason:
+    def test_serving_a_demo(self):
+        from gozer import report
+
+        assert report.theme_for_reason("gradio demo") == "serving a demo"
+        assert report.theme_for_reason(
+            "serve tt-tnt v6 thin bundle for hardware verification") == "serving a demo"
+
+    def test_verification_and_testing(self):
+        from gozer import report
+
+        assert report.theme_for_reason("verify rotary_embedding_llama matches convention") == "verification / testing"
+        assert report.theme_for_reason("TDD: test_tt_inference should fail before implementation") == "verification / testing"
+        assert report.theme_for_reason("Stage 0 end-to-end sanity check") == "verification / testing"
+
+    def test_debugging(self):
+        from gozer import report
+
+        assert report.theme_for_reason("debug url_ok launch failure") == "debugging"
+        assert report.theme_for_reason("trace bool schema origin") == "debugging"
+
+    def test_benchmarking_and_optimization(self):
+        from gozer import report
+
+        assert report.theme_for_reason("bf16 precision optimization pass") == "benchmarking / optimization"
+        assert report.theme_for_reason("benchmark tt-tnt decode throughput") == "benchmarking / optimization"
+
+    def test_bring_up(self):
+        from gozer import report
+
+        assert report.theme_for_reason("V-JEPA2 functional decoder bring-up") == "bring-up"
+
+    def test_build_and_packaging(self):
+        from gozer import report
+
+        assert report.theme_for_reason("rebuild+validate Dockerfile.qb2 against real hardware") == "build / packaging"
+
+    def test_unmatched_reason_falls_back_to_general_work(self):
+        from gozer import report
+
+        assert report.theme_for_reason("something entirely novel happening here") == "general work"
+
+    def test_missing_reason_falls_back_to_general_work(self):
+        from gozer import report
+
+        assert report.theme_for_reason(None) == "general work"
+
+
+class TestRenderRedactsReasons:
+    def test_embedded_events_carry_themes_not_raw_reasons(self):
+        from gozer import report
+
+        events = _events()
+        events[0]["reason"] = "a very specific internal project codename and plan"
+        html = report.render(events)
+        assert "a very specific internal project codename and plan" not in html
+
+    def test_embedded_events_still_carry_a_reason_field(self):
+        from gozer import report
+
+        html = report.render(_events())
+        start = html.index('<script type="application/json" id="gozer-events">')
+        end = html.index("</script>", start)
+        blob = json.loads(html[start:end].split(">", 1)[1])
+        reasons = {e.get("reason") for e in blob if e.get("event") == "granted"}
+        assert reasons == {"bring-up", "serving a demo", "general work"}
