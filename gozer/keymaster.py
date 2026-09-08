@@ -497,7 +497,16 @@ class Keymaster:
             finally:
                 for s, handler in previous_handlers.items():
                     signal.signal(s, handler)
-                self.release(grant.lease_id)
+                # release()'s return value carries *why* the reset did or
+                # didn't succeed (e.g. the reset binary not being on PATH) --
+                # `gozer release` surfaces this via cmd_release's _emit, but
+                # run() used to discard it entirely, so a reset failure during
+                # auto-cleanup was invisible anywhere except the bare
+                # reset_ok=false in history.jsonl. Print it here so both paths
+                # report the same thing.
+                _, msg = self.release(grant.lease_id)
+                if msg:
+                    print(f"gozer run: {msg}", file=sys.stderr)
         finally:
             signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
 
