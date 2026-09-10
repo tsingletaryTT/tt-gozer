@@ -54,6 +54,7 @@ def _make(args) -> tuple[Gatekeeper, Keymaster]:
         root=os.environ.get("GOZER_ROOT"),
         sysfs_root=os.environ.get("GOZER_SYSFS_ROOT"),
         proc_root=os.environ.get("GOZER_PROC_ROOT", "/proc"),
+        history_root=os.environ.get("GOZER_HISTORY_ROOT"),
     )
     return gk, Keymaster(gk)
 
@@ -364,7 +365,7 @@ def cmd_adopt(args) -> int:
         _emit({"adopted": False}, f"{target} is already leased", args.json)
         return EXIT_UNAVAILABLE
     gk.write_lease(lease)
-    history.log(gk.root, "adopted", lease_id=lease_id, who=args.who,
+    history.log(gk.history_root, "adopted", lease_id=lease_id, who=args.who,
                chips=lease["chips"], pids=pids)
     _emit({"adopted": True, "lease_id": lease_id, "pids": pids},
           f"adopted {target} for {args.who} (pid {pids[0]}), lease {lease_id}",
@@ -397,7 +398,7 @@ def _format_history_line(rec: dict) -> str:
 
 def cmd_history(args) -> int:
     gk, _ = _make(args)
-    records = history.read(gk.root)
+    records = history.read(gk.history_root)
     n = args.n if args.n and args.n > 0 else 20
     tail = records[-n:]
     human = "\n".join(_format_history_line(r) for r in tail) or "(no history)"
@@ -407,7 +408,7 @@ def cmd_history(args) -> int:
 
 def cmd_report(args) -> int:
     gk, _ = _make(args)
-    records = history.read(gk.root)
+    records = history.read(gk.history_root)
     if not records:
         print("gozer report: no history yet -- nothing to report on", file=sys.stderr)
         return EXIT_UNAVAILABLE
@@ -417,7 +418,7 @@ def cmd_report(args) -> int:
         print(jsonlib.dumps(stats))
         return EXIT_OK
 
-    html = report.render(records, source_note=gk.root)
+    html = report.render(records, source_note=gk.history_root)
     out_path = args.out or os.path.join(_repo_root(), "docs", "index.html")
     with open(out_path, "w") as f:
         f.write(html)

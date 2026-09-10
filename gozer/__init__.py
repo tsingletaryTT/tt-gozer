@@ -15,4 +15,4 @@ The keymaster must meet the gatekeeper for the coming of Gozer.
 # 0.3.1: `gozer report` no longer embeds the literal --reason text of every
 # lease into the published page -- it maps each reason to a small public-safe
 # theme label instead (see gozer/report.py's theme_for_reason()).
-__version__ = "0.3.1"
+__version__ = "0.3.2"

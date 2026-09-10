@@ -282,13 +282,17 @@ All plain files. Inspect with `ls` and `cat`; recover by hand if you ever need t
 only place `gozer` remembers anything past-tense. Everything else in this state directory is
 present-tense and vanishes the moment a lease is released or reaped, which is exactly why
 `gozer history` exists -- to answer "who had the chips two hours ago" after the gate itself has
-already forgotten. Like the rest of `/tmp/tt-gozer`, it does not survive a reboot; that's a real
-limitation of living in `/tmp`, not a secret. Each line is written with a single `write()` call
-on a file opened `O_APPEND`, which is atomic on Linux for writes under `PIPE_BUF` (4096 bytes),
-so concurrent agents logging at the same moment cannot interleave a torn line. Logging is
-best-effort: a full disk or a permissions problem is swallowed rather than failing the command
-that triggered it (never worse for `release`, which has already done its destructive work by
-the time it logs).
+already forgotten. By default it lives right alongside the rest of `/tmp/tt-gozer` and does not
+survive a reboot -- leases/gate/queue *should* vanish on reboot (the chips get reset), and until
+2026-09-10 the history log inherited that fate too, purely as a side effect of sharing a
+directory with them. Set `GOZER_HISTORY_ROOT` to a path outside `/tmp` (e.g.
+`~/.local/state/tt-gozer`) to keep the audit trail across reboots while leases/gate/queue stay
+ephemeral under `GOZER_ROOT` as before; leave it unset and nothing changes. Each line is written
+with a single `write()` call on a file opened `O_APPEND`, which is atomic on Linux for writes
+under `PIPE_BUF` (4096 bytes), so concurrent agents logging at the same moment cannot interleave
+a torn line. Logging is best-effort: a full disk or a permissions problem is swallowed rather
+than failing the command that triggered it (never worse for `release`, which has already done
+its destructive work by the time it logs).
 
 ## Safety properties
 
@@ -310,8 +314,8 @@ the time it logs).
 python3 -m pytest
 ```
 
-No hardware required. `GOZER_ROOT`, `GOZER_SYSFS_ROOT`, `GOZER_PROC_ROOT` and
-`GOZER_RESET_CMD` redirect every external dependency, so the suite runs anywhere and never
+No hardware required. `GOZER_ROOT`, `GOZER_HISTORY_ROOT`, `GOZER_SYSFS_ROOT`, `GOZER_PROC_ROOT`
+and `GOZER_RESET_CMD` redirect every external dependency, so the suite runs anywhere and never
 touches a device.
 
 ## The name

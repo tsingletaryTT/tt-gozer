@@ -16,6 +16,14 @@ Multi-user sharing: `root`, `gate/`, `leases/` and `queue/` are all sticky
 remove one — that is what stops one user from deleting another's lock. The
 mutex lives in its own *non-sticky* `mutex/` (0o777) directory instead, for
 reasons explained on `critical_section`.
+
+`history.jsonl` (see gozer/history.py) lives under a separate `history_root`
+attribute, not necessarily `root`: it defaults to `root` (so by default it
+sits right alongside the rest of this layout and is lost on reboot with it),
+but `GOZER_HISTORY_ROOT` or the `history_root` constructor param can point it
+at a persistent path instead. That split exists because leases/gate/queue
+*should* vanish on reboot — the chips themselves get reset — while the
+append-only audit trail doesn't have to.
 """
 
 from __future__ import annotations
@@ -114,8 +122,16 @@ class ChipState:
 
 class Gatekeeper:
     def __init__(self, root: str | None = None, sysfs_root: str | None = None,
-                 proc_root: str = "/proc"):
+                 proc_root: str = "/proc", history_root: str | None = None):
         self.root = root or os.environ.get("GOZER_ROOT") or DEFAULT_ROOT
+        # history.jsonl's home is decoupled from the rest of the gate state:
+        # leases/gate/queue *should* vanish on reboot (the chips themselves
+        # get reset), but the audit trail doesn't have to. Defaults to
+        # self.root -- today's exact behavior -- unless a caller opts into a
+        # persistent path via GOZER_HISTORY_ROOT or this param.
+        self.history_root = (history_root
+                              or os.environ.get("GOZER_HISTORY_ROOT")
+                              or self.root)
         self.sysfs_root = sysfs_root
         self.proc_root = proc_root
         # Set by cmd_reconcile when --sudo is passed; see procfd.holders().
@@ -156,6 +172,12 @@ class Gatekeeper:
         os.makedirs(mutex_dir, exist_ok=True)
         with contextlib.suppress(OSError):
             os.chmod(mutex_dir, 0o777)
+        if self.history_root != self.root:
+            first_history = not os.path.isdir(self.history_root)
+            os.makedirs(self.history_root, exist_ok=True)
+            if first_history:
+                with contextlib.suppress(OSError):
+                    os.chmod(self.history_root, 0o1777)
 
     def _gate_dir(self, unit_key: str) -> str:
         return os.path.join(self.root, "gate", f"{unit_key}.lock")
@@ -522,7 +544,7 @@ class Gatekeeper:
                         self.delete_lease(lease_id)
                     since = lease.get("since")
                     duration_s = _elapsed_seconds(since, now) if since else None
-                    history.log(self.root, "reaped", lease_id=lease_id,
+                    history.log(self.history_root, "reaped", lease_id=lease_id,
                                who=lease.get("who"), chips=lease.get("chips", []),
                                duration_s=duration_s, why=why)
             # Re-derive so callers see FREE rather than the pre-reap STALE.

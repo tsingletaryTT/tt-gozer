@@ -548,6 +548,21 @@ def test_history_is_newest_last(env, capsys):
     assert events[-1]["who"] == "claude:b"
 
 
+def test_gozer_history_root_env_var_redirects_the_log(env, capsys, tmp_path, monkeypatch):
+    history_dir = tmp_path / "persistent-history"
+    monkeypatch.setenv("GOZER_HISTORY_ROOT", str(history_dir))
+
+    run(["acquire", "--chips", "1", "--who", "claude:x", "--json"], capsys)
+
+    assert (history_dir / "history.jsonl").exists()
+    assert not (env / "state" / "history.jsonl").exists()
+
+    code, out = run(["history", "--json"], capsys)
+    assert code == 0
+    assert any(r["event"] == "granted" and r["who"] == "claude:x"
+              for r in json.loads(out)["history"])
+
+
 def test_report_json_emits_computed_stats(env, capsys, tmp_path):
     _, acq_out = run(["acquire", "--chips", "1", "--who", "claude:x", "--json"], capsys)
     lease_id = json.loads(acq_out)["lease_id"]

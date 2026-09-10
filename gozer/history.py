@@ -6,15 +6,19 @@ way to answer "who had the chips two hours ago", "how long do leases
 actually run", or "how often do we contend" -- which is the founding
 requirement (*who holds the device* is legible) failing in the past tense.
 
-`<GOZER_ROOT>/history.jsonl` fixes that: one JSON object per line, appended
-forever, never rewritten or truncated by this module. Deliberately inside
-GOZER_ROOT (default /tmp/tt-gozer), *not* a per-user path like
-`~/.local/state`: the whole point is one shared timeline across every agent
-on the box, and a per-user path would fragment it into as many logs as there
-are users. It is lost on reboot along with the rest of /tmp -- that is a real
-limitation, not a secret; do not "fix" it by moving the log somewhere
-persistent without re-reading why GOZER_ROOT lives in /tmp in the first
-place (see the design spec and gatekeeper.py's module docstring).
+`<history_root>/history.jsonl` fixes that: one JSON object per line, appended
+forever, never rewritten or truncated by this module. `history_root` is a
+Gatekeeper's own `history_root` attribute, which defaults to `GOZER_ROOT`
+(default /tmp/tt-gozer) -- so by default the log lives alongside the rest of
+the gate state and is lost on reboot along with it, same as before. Unlike
+`GOZER_ROOT`, though, this location can be moved: `GOZER_HISTORY_ROOT` (or
+Gatekeeper's `history_root` param) points it at a persistent path instead,
+while leases/gate/queue stay under `GOZER_ROOT` -- those correctly vanish on
+reboot (the chips themselves get reset), but the audit trail doesn't have to.
+Not a per-user path like `~/.local/state` even when redirected: the whole
+point is one shared timeline across every agent on the box, and a per-user
+path would fragment it into as many logs as there are users. See
+gatekeeper.py's module docstring and the design spec's Observability section.
 
 Concurrency: every write opens with O_APPEND and lands in exactly one
 write() syscall. On Linux, a write() of at most PIPE_BUF (4096) bytes to a
@@ -51,10 +55,10 @@ def _path(root: str) -> str:
 def log(root: str, event: str, **fields) -> None:
     """Append one event record. Never raises -- see the module docstring.
 
-    `root` is a Gatekeeper's state root (GOZER_ROOT), not a full path: the
-    caller doesn't need to know the log's filename, only where the gate's
-    other state (`gate/`, `leases/`, `queue/`) lives, since this file sits
-    alongside them.
+    `root` is a directory, not a full path -- pass a Gatekeeper's
+    `history_root` (which defaults to `GOZER_ROOT`, alongside `gate/`,
+    `leases/`, `queue/`, but can be redirected independently of them; see the
+    module docstring), not a filename.
     """
     record = {"ts": utcnow(), "event": event, **fields}
     # One json.dumps -> one encode -> one write(). Do not split this into

@@ -205,7 +205,7 @@ class Keymaster:
                 expanded=len(chips) > max_chips,
                 neighbours=self.gk.eth_neighbours(units),
             )
-            history.log(self.gk.root, "granted", lease_id=lease_id, who=who,
+            history.log(self.gk.history_root, "granted", lease_id=lease_id, who=who,
                        reason=reason, chips=grant.bdfs,
                        dev_indices=grant.dev_indices, units=units,
                        detached=detached, pid=pid, expanded=grant.expanded,
@@ -247,7 +247,7 @@ class Keymaster:
         # ticket:` branch above): reuse is `wait` replaying an existing
         # queued request, which was already logged once when it was first
         # enqueued.
-        history.log(self.gk.root, "queued", ticket=rec["ticket"],
+        history.log(self.gk.history_root, "queued", ticket=rec["ticket"],
                    who=request["who"], min_chips=request["min_chips"],
                    max_chips=request["max_chips"])
         return rec
@@ -301,7 +301,7 @@ class Keymaster:
         fd_map = procfd.holders(self.gk.proc_root)
         still_open = [d for d in lease.get("dev_indices", []) if fd_map.get(d)]
         if still_open and not force:
-            history.log(self.gk.root, "refused", action="release",
+            history.log(self.gk.history_root, "refused", action="release",
                        lease_id=lease_id, who=lease.get("who"),
                        reason="device still open", dev_indices=still_open)
             return False, (
@@ -316,7 +316,7 @@ class Keymaster:
             unheld = [u for u in units
                       if self.gk.unit_lease(u) is None]
         if foreign:
-            history.log(self.gk.root, "refused", action="release",
+            history.log(self.gk.history_root, "refused", action="release",
                        lease_id=lease_id, who=lease.get("who"),
                        reason="units now belong to another lease",
                        foreign=foreign)
@@ -350,7 +350,7 @@ class Keymaster:
         with self.gk.critical_section():
             foreign = self._units_held_elsewhere(units, lease_id)
             if foreign:
-                history.log(self.gk.root, "refused", action="release",
+                history.log(self.gk.history_root, "refused", action="release",
                            lease_id=lease_id, who=lease.get("who"),
                            reason="units now belong to another lease "
                                   "(discovered after the reset)",
@@ -380,7 +380,7 @@ class Keymaster:
 
         since = lease.get("since")
         duration_s = _elapsed_seconds(since, utcnow()) if since else None
-        history.log(self.gk.root, "released", lease_id=lease_id,
+        history.log(self.gk.history_root, "released", lease_id=lease_id,
                    who=lease.get("who"), chips=lease.get("chips", []),
                    duration_s=duration_s, reset_ran=reset_ran,
                    reset_ok=reset_ok if reset_ran else None)

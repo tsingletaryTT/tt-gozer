@@ -598,10 +598,15 @@ reaped. There was no way to answer "who had the chips two hours ago", "how long 
 actually run", or "how often do we contend" -- the founding requirement (who holds the device
 is legible) held only in the present tense.
 
-`gozer/history.py` adds `<GOZER_ROOT>/history.jsonl`: one JSON object per line, appended
-forever, never rewritten. It lives inside `GOZER_ROOT` (not a per-user path like
+`gozer/history.py` adds `<history_root>/history.jsonl`: one JSON object per line, appended
+forever, never rewritten. It lives inside a shared root (not a per-user path like
 `~/.local/state`) because the point is one shared timeline across every agent on the box; a
-per-user path would fragment it. Like the rest of `/tmp/tt-gozer`, it does not survive reboot.
+per-user path would fragment it. By default `history_root` is `GOZER_ROOT`, so like the rest of
+`/tmp/tt-gozer` it does not survive reboot -- but that was always an accident of sharing a
+directory with state that legitimately *should* be reboot-ephemeral (leases, the gate, the
+queue), not a property the audit trail needs. *Added 2026-09-10:* `GOZER_HISTORY_ROOT` (or
+`Gatekeeper(history_root=...)`) decouples the two, pointing the log at a persistent path while
+leases/gate/queue stay under `GOZER_ROOT`. Unset, behavior is unchanged.
 
 Each write is a single `os.write()` to an fd opened `O_APPEND`; on Linux that is atomic under
 `PIPE_BUF` (4096 bytes), so concurrent agents cannot interleave a torn line. Every write is

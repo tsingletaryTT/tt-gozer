@@ -281,3 +281,34 @@ prompt/reason text, not operator identity.
 `docs/index.html` regenerated against the current live log with themed reasons throughout.
 TDD (`TestThemeForReason`, `TestRenderRedactsReasons` in `tests/test_report.py`); full suite 251
 tests green. Version bumped to 0.3.1.
+
+## `GOZER_HISTORY_ROOT`: history.jsonl survives a reboot (2026-09-10)
+
+**Original request:** "Add a persistent logging option so logs aren't lost on reboot anymore."
+`history.jsonl` had always inherited `GOZER_ROOT`'s home (`/tmp/tt-gozer` by default) purely
+because it lived alongside `gate/`/`leases/`/`queue/` — state that legitimately *should*
+vanish on reboot, since the chips themselves get reset. The audit trail doesn't need that
+property, and losing it every reboot defeated the point of `gozer report`'s containment page.
+
+New `Gatekeeper(history_root=...)` param / `GOZER_HISTORY_ROOT` env var, read by `cli._make`
+alongside the existing `GOZER_ROOT`/`GOZER_SYSFS_ROOT`/`GOZER_PROC_ROOT`. Defaults to
+`self.root` — unset, behavior is byte-for-byte what it was before. When set to a path outside
+`/tmp` (e.g. `~/.local/state/tt-gozer`), `history.jsonl` lives there and survives a reboot while
+`gate/`/`leases/`/`queue/`/`mutex/` stay under `GOZER_ROOT` as before. Every `history.log`/
+`history.read` call site (gatekeeper.py's reap, keymaster.py's granted/queued/released/refused,
+cli.py's adopted/history/report) now goes through `gk.history_root` instead of `gk.root`.
+`_ensure_dirs` creates the history root too (same sticky-0o1777 multi-user rationale) when it
+differs from `root`.
+
+Bounded-path brainstorm (no spec file): decoupling the log's location from the lock state's
+location, rather than just repointing `GOZER_ROOT` itself, which would also make leases survive
+reboot — the wrong fix, since a lease surviving past the reboot that reset its chips is stale by
+construction.
+
+TDD: `tests/test_history_root.py` (7 tests: default unchanged, param/env-var override, param
+wins over env var, directory created, events land in the right root, history survives the
+GOZER_ROOT directory being wiped out from under it) plus one CLI-level test in `tests/test_cli.py`
+(`test_gozer_history_root_env_var_redirects_the_log`). Docs updated everywhere the old
+"lost on reboot, that's just how it is" language appeared: `gozer/history.py` and
+`gozer/gatekeeper.py` module docstrings, README's State Format and Testing sections, and the
+design spec's Observability section. Full suite 260 tests green. Version bumped to 0.3.2.
