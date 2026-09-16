@@ -34,6 +34,29 @@ Whatever is holding the chip (fd open, a live owning process, or a detached
 lease still inside its grace window) is still legitimately there. **This is not permission to reap
 it.** Ask the human, or wait.
 
+## Observers are not leasees
+
+`tt-smi`, `tt-toplike`, and anything else reading telemetry only *watch* the
+chips — they never open the device exclusively and they hold no lease. Seeing
+utilization, memory, or process activity on a chip through one of these is not
+evidence that anything was "hijacked." That word describes what a lease
+actually protects against: `gozer status` reporting `HELD-FOREIGN`, or a chip
+your own lease says you hold that someone else's process has opened. A busy
+chip you don't hold a lease on is almost always `BUSY-UNTRACKED` — legitimate
+work started outside gozer (below) — not a hostile takeover. Check `gozer
+status` before drawing a conclusion from telemetry alone.
+
+**The one real exception: `tt-smi -r` actually running.** A reset in progress
+is not passive observation — it's someone or something having decided, right
+now, that these boards need to come down and back up. That is the one point
+where the observation layer and gozer's own hardware-mutating path genuinely
+meet — crossing the streams. Seeing one happen outside your own `gozer
+release` is a real, deliberate event worth noticing and asking about, not
+routine drift and not hijacking either. And it cuts both ways: when *you* are
+the one about to run `tt-smi -r`, take a lease first (`gozer acquire` /
+`gozer run`) exactly as you would before any other command that opens
+`/dev/tenstorrent/*` — see gozer-keymaster.
+
 ## Untracked work
 
 A chip open with no lease usually means someone started a server by hand. Make it

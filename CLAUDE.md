@@ -123,6 +123,23 @@ and roughly what fixing it would take.
   and `msg` can carry embedded `tt-smi` output. It has not misfired, but the
   right shape is a structured reason on the return value rather than prose.
 
+## `gozer-gatekeeper` distinguishes observing from leasing (2026-09-15)
+
+**Original request:** tools like `tt-smi` and `tt-toplike` only watch telemetry -- they
+hold no lease and never open the device exclusively -- so seeing chip activity through
+them shouldn't be read as "hijacked." The one case that really is a deliberate event is
+`tt-smi -r` actually running: someone or something decided the boards need a reset, which
+is where gozer's own hardware-mutating path and the passive-observation tools actually
+meet ("crossing the streams"). Taking a lease before running `tt-smi -r` yourself is
+already covered by the existing `--owner-pid`/`gozer run` guidance.
+
+Added a new "Observers are not leasees" section to `skills/gozer-gatekeeper/SKILL.md`,
+ahead of "Untracked work": reserves "hijacked" for what a lease actually protects against
+(`HELD-FOREIGN`, or your own held chip opened by someone else's process), calls a busy
+chip with no lease `BUSY-UNTRACKED` rather than a takeover, and calls out an in-progress
+`tt-smi -r` as the one legitimate exception worth noticing -- alongside the reminder to
+lease before running it yourself.
+
 ## Open
 
 * Hardware spike: does resetting one ASIC perturb a live neighbour's eth links?
