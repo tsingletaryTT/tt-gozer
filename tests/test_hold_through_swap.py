@@ -12,6 +12,7 @@ only after it. A holder that already has a device open makes that board look
 busy, and the acquire would move to the other board.
 """
 import json
+import os
 import shutil
 import stat
 
@@ -137,7 +138,7 @@ def test_control_a_lease_without_an_owner_pid_is_reaped_in_the_same_gap(env, cap
 
 def test_a_fresh_bare_lease_survives_the_gap_inside_the_grace_window(env, capsys):
     """Pins the other side of the control: the bare lease is only lost after
-    the window, so the control above fails because the window has passed."""
+    the window, so the control above reaps only because the window has passed."""
     code, grant = acquire(capsys)
     assert code == 0
     assert states(capsys, "reconcile")[0] == "CLAIMED"
@@ -198,24 +199,40 @@ def test_release_refuses_while_the_servers_device_is_open(env, capsys):
     assert Gatekeeper().read_lease(grant["lease_id"]) is not None
 
 
+@pytest.mark.skipif(os.geteuid() == 0,
+                    reason="root can list a mode-0 directory, so the server would stay visible")
 def test_a_container_server_gozer_cannot_see_does_not_stop_reset(env, capsys):
     """KNOWN LIMIT, pinned on purpose. gozer reads /proc/<pid>/fd as the calling
     user, so a device handle held by a root-owned container process is
-    invisible to it. The server below is alive but has no fd link in the fake
-    /proc, which is what gozer sees for such a process. `status` shows CLAIMED
-    and `reset` goes ahead, so the supervisor has to confirm the stop itself
-    (tt-model ps, docker ps) before it resets. This is what the "confirm the
-    workload has stopped" section of skills/gozer-park/SKILL.md warns about.
+    invisible to it. The server below is alive and holds the device. Its fd
+    directory is then made unreadable (mode 0), which is what an unprivileged
+    gozer meets for a root-owned process. Before the chmod the server is
+    visible, so `status` shows HELD and `reset` refuses. After it `status`
+    shows CLAIMED and `reset` goes ahead. The supervisor has to confirm the
+    stop itself (tt-model ps, docker ps) before it resets. The "confirm the
+    workload has stopped" section of skills/gozer-park/SKILL.md warns about
+    this.
 
-    This test pins a known limit. If gozer ever gains root-visible scanning,
-    this test must be updated: reset should then refuse here."""
+    This test pins a known limit. Revisit it if gozer ever refuses or warns for
+    an unreadable fd directory, or gains root-visible scanning."""
     tmp_path, marker = env
     code, grant = acquire(capsys, "--owner-pid", str(OWNER))
     assert code == 0
-    fake_proc_tree(tmp_path, {SERVER: {"ppid": 1, "devs": []}})   # alive, device handle hidden
-    assert states(capsys)[0] == "CLAIMED"
-    code, _ = run(["reset", grant["lease_id"]], capsys)
-    assert code == 0 and resets(marker) == 1
+    lease_id = grant["lease_id"]
+    start_process(tmp_path, SERVER, OWNER)
+    fd_dir = tmp_path / "proc" / str(SERVER) / "fd"
+
+    assert states(capsys)[0] == "HELD"                     # visible first
+    code, _ = run(["reset", lease_id], capsys)
+    assert code == 15 and resets(marker) == 0
+
+    os.chmod(fd_dir, 0)
+    try:
+        assert states(capsys)[0] == "CLAIMED"              # present but invisible
+        code, _ = run(["reset", lease_id], capsys)
+        assert code == 0 and resets(marker) == 1           # gozer does not refuse
+    finally:
+        os.chmod(fd_dir, 0o700)                            # let pytest clean the tree
 
 
 def test_a_queued_supervisor_retries_with_its_ticket_and_gets_an_owned_lease(env, capsys):
@@ -225,7 +242,7 @@ def test_a_queued_supervisor_retries_with_its_ticket_and_gets_an_owned_lease(env
     is not used, because it grants without an owner pid.
 
     The claim window is 90 s of wall clock, so the test does not wait it out.
-    It checks the one deterministic path, a retry by the head ticket right after
+    It checks the deterministic path, a retry by the head ticket right after
     the release, and that a retry without the ticket does not jump the queue."""
     code, first = acquire(capsys, "--owner-pid", str(OWNER))
     assert code == 0
@@ -247,7 +264,8 @@ def test_a_queued_supervisor_retries_with_its_ticket_and_gets_an_owned_lease(env
 
     code, jumped = acquire(capsys, "--owner-pid", str(OWNER))   # no ticket: must not jump the queue
     assert code == 10 and jumped["ticket"] != ticket
-    run(["cancel", jumped["ticket"]], capsys)
+    code, _ = run(["cancel", jumped["ticket"]], capsys)
+    assert code == 0
 
     code, granted = acquire(capsys, "--ticket", ticket, "--owner-pid", str(OTHER_OWNER))
     assert code == 0 and granted["granted"] is True

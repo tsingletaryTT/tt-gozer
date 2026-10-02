@@ -44,7 +44,16 @@ on a ticket*, so age is the only rule a ticket can be judged by. It also caught
 reap take the mutex — and two places where the spec still described the old code.
 See `## Known limitations` below for what the reviews found and left standing.
 
-**Hold through a model swap (2026-10-02).** tt-orchard (the supervisor in `~/code/tt-orchard`) needs to hold a board while it swaps the model server. gozer gained `reset <lease>`, descendant-aware ownership for owner pids above 1, and the `gozer-park` skill. The work lives on branch `orchard-hold-through-swap` in a worktree. The test suite no longer reads the real `/proc`. `tests/test_hold_through_swap.py` runs the whole swap through the CLI and pins the container blind spot. The version was not bumped, because the live checkout has an uncommitted bump to 0.3.3 and the owner bumps at merge.
+**Hold through a model swap (2026-10-02).** tt-orchard (the supervisor in
+`~/code/tt-orchard`) needs to hold a board while it swaps the model server. gozer
+gained `reset <lease>`, descendant-aware ownership for owner pids above 1, and the
+`gozer-park` skill. The work lives on branch `orchard-hold-through-swap` in a
+worktree. The test suite no longer reads the real `/proc`.
+`tests/test_hold_through_swap.py` runs the whole swap through the CLI and pins the
+container blind spot. The version was not bumped, because the live checkout has an
+uncommitted bump to 0.3.3 and the owner bumps at merge. Open item: `gozer wait`
+grants a lease without an owner pid, so a supervisor re-runs `acquire --owner-pid
+... --ticket`; supporting `--owner-pid` on `wait` is a small code change if wanted.
 
 ## Key decisions and why
 
