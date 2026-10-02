@@ -202,14 +202,22 @@ def test_gozer_park_skill_shows_only_verbs_and_flags_gozer_has():
                 assert flag in flags, f"gozer {verb} has no {flag}: {line}"
     # Commands named in prose, in backticks, must exist too. Flags in prose
     # are checked the same way.
-    import re as _re
     text = open(PARK_SKILL).read()
-    for span in _re.findall(r"`(gozer\s[^`]*)`", text):
-        m = _re.match(r"gozer\s+([a-z][\w-]*)(.*)", span)
+    for span in re.findall(r"`(gozer\s[^`]*)`", text):
+        m = re.match(r"gozer\s+([a-z][\w-]*)(.*)", span)
         verb = m.group(1)
         assert verb in verbs, f"skill names unknown verb in prose: {span}"
         flags = {opt for a in verbs[verb]._actions for opt in a.option_strings}
-        for flag in _re.findall(r"(?<![\w-])(--[a-z][\w-]*)", m.group(2)):
+        for flag in re.findall(r"(?<![\w-])(--[a-z][\w-]*)", m.group(2)):
             assert flag in flags, f"gozer {verb} has no {flag}: {span}"
+    # A standalone backticked flag such as `--ticket` is checked against the
+    # flags of every verb the skill uses. It must belong to at least one of
+    # them. (The skill does not say which verb a prose flag goes with, so a
+    # per-verb check is not practical.)
+    used_flags = set()
+    for v in seen:
+        used_flags |= {opt for a in verbs[v]._actions for opt in a.option_strings}
+    for span in re.findall(r"`(--[^`\s]+)[^`]*`", text):
+        assert span in used_flags, f"skill names unknown flag in prose: {span}"
     # The block must really exercise the commands the skill teaches.
     assert {"acquire", "env", "reset", "release"} <= seen, seen
