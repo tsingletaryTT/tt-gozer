@@ -77,7 +77,7 @@ Then run `gozer status` and wait until your chips show `CLAIMED`. `HELD` means a
 your tree still has the device open. `HELD-FOREIGN` means a process outside it does.
 
 `gozer reset` refuses (exit 15) while a device is open by one of your own processes. That check
-is a backstop for your own processes only.
+covers only your own processes.
 
 ## The swap
 
@@ -104,9 +104,14 @@ reset on release can. See the eth-neighbour warning in `gozer-keymaster`.
 |---|---|---|
 | `0` | the reset ran and succeeded | continue |
 | `13` | no such lease | the lease was released or reaped; take a new one |
-| `15` | refused, nothing was reset | a device is open (stop the workload), the unit is no longer locked by this lease or now belongs to another lease, or the lease record has no units or chips or disagrees with its units (run `gozer status` and take a new lease) |
+| `15` | refused, nothing was reset | see below |
 | `17` | tt-smi ran and failed | the lease is still yours; read the message, try once more, then stop and tell a person |
 | `18` | the reset ran, and the lease was then gone or another lease held its chips | do not start a server; run `gozer status` and take a new lease |
+
+Exit 15 has two kinds of cause. If a device is open, stop the workload and try again. If the
+unit is no longer locked by this lease, now belongs to another lease, or the lease record has no
+units or chips, or disagrees with its units, or holds a malformed chip id, run `gozer status`
+and take a new lease.
 
 ## Release for a long phase with no hardware
 
@@ -117,8 +122,9 @@ not use the chips for a long time, such as an image build or a CPU-only referenc
 gozer release <lease-id>
 ```
 
-`release` also resets the chips, and it refuses (exit 15) while a device is open by one of
-your own processes. Take a new lease when the hardware phase begins. If the board is busy by
+`release` also resets the chips, and it refuses (exit 15) only while a device is open by one of
+your own processes. Before you run it, confirm that the workload has stopped, using the checks
+in "Before every reset". Take a new lease when the hardware phase begins. If the board is busy by
 then, `acquire` exits 10 with a ticket. Re-run it with `--ticket`, as described above.
 
 ## If the supervisor dies
@@ -126,3 +132,9 @@ then, `acquire` exits 10 with a ticket. Re-run it with `--ticket`, as described 
 gozer reaps the lease once the owner pid is dead and no device is open. A server that is still
 running keeps its device open, so the lease stays and `gozer status` shows `HELD-FOREIGN`.
 Do not use `--force` to clear that. Stop the server first, then run `gozer reconcile`.
+
+A server in a container, or one owned by root, is different. gozer cannot read its file
+descriptors, so once the owner pid is dead the lease is reaped and the board shows `FREE`
+while the container still holds the chips. A restarted supervisor must check `tt-model ps` or
+`docker ps` before it takes a new lease, and must not trust `FREE` alone. "Before every reset"
+describes the same limit.

@@ -110,6 +110,7 @@ and roughly what fixing it would take.
   section — write `state: "releasing"` into the lock — and teach the reap to
   refuse a unit that is mid-release. Not attempted here: it is a state-format
   change, and the reap would need a staleness rule for a crashed releaser.
+  `reset` has the same window and reports it as exit 18.
 * **A queued agent loses its place after an hour even while polling correctly.**
   `since` is stamped at enqueue and never refreshed, and `_send_to_back`
   preserves it, so a ticket behind a multi-hour lease expires under a caller

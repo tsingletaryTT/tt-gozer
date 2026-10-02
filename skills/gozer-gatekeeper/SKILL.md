@@ -80,8 +80,8 @@ leave it alone.
 --owner-pid N` produces a non-detached lease whose owner is a *supervisor* —
 something that took the lease and then launched the real workload elsewhere
 (`tt-station-agentd` and its serving container are the motivating case). A supervisor
-passes its own pid, not a shell's or pid 1, because every process the owner ever launched counts as
-the owner's own. Two
+passes its own pid, not a shell's or pid 1, because every live descendant of the owner counts as
+the owner's own. A process that was re-parented to init after its parent exited does not. Two
 consequences when you are reading such a lease:
 
 - **No fd is not evidence of a dead lease here.** The workload may be a

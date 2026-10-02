@@ -295,6 +295,7 @@ gozer renew <lease> [--expect DURATION]
 gozer release <lease> [--no-reset] [--force]
 gozer reconcile [--sudo] [--json]
 gozer adopt <chips> --who W [--reason R]
+gozer reset <lease> [--force]   # reset the leased chips and keep the lease
 gozer env <lease>
 gozer run --chips N [options] -- <command...>
 ```
@@ -497,6 +498,10 @@ step 3 runs. Three outcomes, depending on what the re-read finds:
 The mutex is deliberately **not** held across the reset: `tt-smi -r` takes tens of seconds
 and would block every other user of the box for all of it. That leaves a narrowed but real
 window — see "known limitations" in the project `CLAUDE.md`.
+
+`gozer reset <lease>` resets the leased chips and keeps the lease. It follows the same
+revalidation pattern: scan, revalidate under the mutex, drop the mutex for the reset, and
+re-read the gate afterwards. It never marks the unit clean.
 
 ## Skills and wiring
 
