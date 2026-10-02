@@ -200,5 +200,16 @@ def test_gozer_park_skill_shows_only_verbs_and_flags_gozer_has():
             flags = {opt for a in verbs[verb]._actions for opt in a.option_strings}
             for flag in re.findall(r"(?<![\w-])(--[a-z][\w-]*)", rest):
                 assert flag in flags, f"gozer {verb} has no {flag}: {line}"
+    # Commands named in prose, in backticks, must exist too. Flags in prose
+    # are checked the same way.
+    import re as _re
+    text = open(PARK_SKILL).read()
+    for span in _re.findall(r"`(gozer\s[^`]*)`", text):
+        m = _re.match(r"gozer\s+([a-z][\w-]*)(.*)", span)
+        verb = m.group(1)
+        assert verb in verbs, f"skill names unknown verb in prose: {span}"
+        flags = {opt for a in verbs[verb]._actions for opt in a.option_strings}
+        for flag in _re.findall(r"(?<![\w-])(--[a-z][\w-]*)", m.group(2)):
+            assert flag in flags, f"gozer {verb} has no {flag}: {span}"
     # The block must really exercise the commands the skill teaches.
     assert {"acquire", "env", "reset", "release"} <= seen, seen
