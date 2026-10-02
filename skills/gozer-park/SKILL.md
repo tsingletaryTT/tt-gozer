@@ -18,15 +18,26 @@ gozer acquire --chips 1 --who "orchard:<run-id>" --reason "<what the run is doin
 eval "$(gozer env <lease-id>)"
 ```
 
+Add `--json` to `acquire` and read the `lease_id` field to get the lease id. The human output
+prints it too, on the line `lease <id>   release with: gozer release <id>`. `gozer status`
+does not show it, so record it when you take the lease.
+
+If the board is busy, `acquire` exits 10 and prints a ticket. Do other work, then run the
+same `acquire` again with `--ticket <ticket>` added, and repeat until it grants. Do not use
+`gozer wait` for this. `wait` grants the lease itself, and it does so without an owner pid, so
+the lease would fall back to the 15 minute grace window.
+
 Pass the pid of the supervisor itself, the process that stays alive for the whole run and
-starts the servers and tests. In a shell script, `$$` is the script's own pid. Do not pass the
-pid of a throwaway shell or pid 1. The owner pid decides which processes count as yours (see
+starts the servers and tests. A Python supervisor passes `os.getpid()`. A shell script passes
+`$$`, which is the script's own pid. In an interactive or tool-spawned shell, `$$` is that
+shell's pid, which exits early and is the wrong owner. Do not pass pid 1. The owner pid decides which processes count as yours (see
 below), and every process on the machine descends from pid 1, so gozer only counts descendants
 for owner pids above 1.
 
 gozer judges a lease with an owner pid by that pid's liveness. It stays `CLAIMED` while the owner
 lives and nothing has the device open. The 15 minute grace window of a bare `acquire` does not
-apply. When the owner exits and no device is open, gozer reaps the lease.
+apply. When the owner exits and no device is open, the lease shows `STALE` in `gozer status`.
+`gozer reconcile` or the next `gozer acquire` reaps it. `status` only reports it.
 
 ## Start servers and tests from that process
 
@@ -45,21 +56,29 @@ the device open. A process that exits while gozer reads its parent chain can sho
 
 ## The swap
 
-1. Stop the first server cleanly. For tt-model that is `tt-model stop`. Run `gozer status`
-   until your chips are no longer `HELD`.
-2. Reset the chips and keep the lease:
+1. Stop the first server cleanly. For tt-model that is `tt-model stop`.
+2. Confirm that the server is gone, using the server's own tooling. For tt-model, `tt-model ps`
+   no longer lists it. For plain docker, `docker ps` no longer lists the container. Then run
+   `gozer status` and wait until your chips show `CLAIMED`. `HELD` means the server still
+   has the device open. `HELD-FOREIGN` means something outside your process tree has it.
+   gozer reads `/proc/<pid>/fd` as your user, so it cannot see device handles held by a
+   root-owned process such as a container. For a container server, `gozer status` shows
+   `CLAIMED` the whole time, and `tt-model stop` can return before the device is released.
+   Only the server's own tooling shows that it has stopped.
+3. Reset the chips and keep the lease:
 
    ```bash
    gozer reset <lease-id>
    ```
 
-   It refuses (exit 15) while a device is open by one of your own processes. gozer cannot see
-   other users' processes, so a device that another user has open does not make it refuse.
-   Do not pass `--force` unless a person tells you to.
-3. Run the other work with the same exports.
-4. When it ends, run `gozer reset <lease-id>` again. A failed or hung run can leave the chips
+   It refuses (exit 15) while a device is open by one of your own processes. That check is a
+   backstop for your own processes only. gozer cannot see other users' or root-owned
+   processes, so a device they have open does not make it refuse. Do not pass `--force`
+   unless a person tells you to.
+4. Run the other work with the same exports.
+5. When it ends, run `gozer reset <lease-id>` again. A failed or hung run can leave the chips
    dirty.
-5. Start the first server again with the same exports.
+6. Start the first server again with the same exports.
 
 If the board's eth mesh is shared with another tenant, a reset can perturb that tenant, as a
 reset on release can. See the eth-neighbour warning in `gozer-keymaster`.
@@ -70,7 +89,7 @@ reset on release can. See the eth-neighbour warning in `gozer-keymaster`.
 |---|---|---|
 | `0` | the reset ran and succeeded | continue |
 | `13` | no such lease | the lease was released or reaped; take a new one |
-| `15` | refused, nothing was reset | a device is open (stop the workload), the unit now belongs to another lease, or the lease record has no units or chips or disagrees with its units (run `gozer status` and take a new lease) |
+| `15` | refused, nothing was reset | a device is open (stop the workload), the unit is no longer locked by this lease or now belongs to another lease, or the lease record has no units or chips or disagrees with its units (run `gozer status` and take a new lease) |
 | `17` | tt-smi ran and failed | the lease is still yours; read the message, try once more, then stop and tell a person |
 | `18` | the reset ran, and the lease was then gone or another lease held its chips | do not start a server; run `gozer status` and take a new lease |
 
@@ -83,7 +102,9 @@ not use the chips for a long time, such as an image build or a CPU-only referenc
 gozer release <lease-id>
 ```
 
-and take a new lease when the hardware phase begins. Expect to queue.
+`release` also resets the chips, and it refuses (exit 15) while a device is open by one of
+your own processes. Take a new lease when the hardware phase begins. If the board is busy by
+then, `acquire` exits 10 with a ticket. Re-run it with `--ticket`, as described above.
 
 ## If the supervisor dies
 
