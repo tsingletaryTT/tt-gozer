@@ -427,6 +427,31 @@ class Keymaster:
                 f"lease {lease_id} has no units or chips recorded; "
                 "nothing was reset"))
 
+        # The gate checks below look at `units` only, but tt-smi runs on
+        # `chips` and the open-device scan reads `dev_indices`. Both come from
+        # the record. A record whose lists reach past its units would reset
+        # another tenant's chips (or skip the scan) while every gate check
+        # passed. So derive the expected chips and indices from the units and
+        # refuse on any difference. This runs before the scan, so the scan only
+        # ever reads verified indices, and --force does not skip it. A unit the
+        # topology does not know gives an empty expected set, which is also a
+        # difference.
+        expected = [c for u in units for c in self.gk.chips_in_unit(u)]
+        want = {"chips": {c.bdf for c in expected},
+                "dev_indices": {c.dev_index for c in expected}}
+        have = {"chips": set(chips), "dev_indices": set(lease.get("dev_indices", []))}
+        bad = [name for name in want if want[name] != have[name]]
+        if bad:
+            history.log(self.gk.history_root, "refused", action="reset",
+                       lease_id=lease_id, who=lease.get("who"),
+                       reason="lease record disagrees with its units",
+                       mismatched=bad)
+            return ResetResult(False, "refused", (
+                f"lease {lease_id} disagrees with its units: " +
+                "; ".join(f"{name} are {sorted(have[name])} but the units "
+                          f"have {sorted(want[name])}" for name in bad) +
+                "; nothing was reset"))
+
         fd_map = procfd.holders(self.gk.proc_root)
         still_open = [d for d in lease.get("dev_indices", []) if fd_map.get(d)]
         if still_open and not force:
@@ -460,15 +485,7 @@ class Keymaster:
                 f"refusing to reset: {', '.join(sorted(unheld))} no longer locked "
                 f"by lease {lease_id} (already reaped?); nothing was reset"))
 
-        try:
-            reset_ok, out = reset_mod.reset_chips(chips, runner=self.reset_runner)
-        except reset_mod.ResetError as e:
-            # A malformed chip id is rejected before any command is built, so
-            # nothing ran. That is a refusal, not a failed reset.
-            history.log(self.gk.history_root, "refused", action="reset",
-                       lease_id=lease_id, who=lease.get("who"),
-                       reason="lease record has a malformed chip id")
-            return ResetResult(False, "refused", f"{e}; nothing was reset")
+        reset_ok, out = reset_mod.reset_chips(chips, runner=self.reset_runner)
         message = out or ("reset ok" if reset_ok else "reset failed")
 
         with self.gk.critical_section():

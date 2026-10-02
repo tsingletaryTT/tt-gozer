@@ -1,6 +1,7 @@
 """`gozer reset` through the CLI: exit codes and JSON."""
 import json
 import os
+import shutil
 import stat
 
 import pytest
@@ -136,7 +137,7 @@ def test_human_output_prints_the_message(env, capsys):
     assert code == 0 and out.strip() == "reset ok"
 
 
-def test_a_lease_taken_during_the_reset_exits_18(env, capsys):
+def test_a_lease_reaped_during_the_reset_exits_18(env, capsys):
     tmp_path, _ = env
     lease = take_lease(capsys)
     # The reset command takes the unit away by removing its gate lock, which
@@ -175,3 +176,62 @@ def test_reset_is_listed_in_help(capsys):
     with pytest.raises(SystemExit):
         main(["--help"])
     assert "reset" in capsys.readouterr().out
+
+
+def test_another_lease_taking_the_unit_during_the_reset_exits_18(env, capsys):
+    tmp_path, _ = env
+    lease = take_lease(capsys)
+    lock = next((tmp_path / "state" / "gate").glob("*.lock"))
+    # The reset command swaps the lock's lease for another tenant's, which is
+    # what a reap followed by a new acquire looks like from outside.
+    script = tmp_path / "reset.sh"
+    script.write_text(
+        f"#!/bin/sh\nprintf '{{\"lease_id\": \"newtenant\", \"who\": \"claude:b\"}}' "
+        f"> {lock}/lease.json\nexit 0\n")
+    code, out = run(["reset", lease, "--json"], capsys)
+    assert code == 18 and json.loads(out)["status"] == "changed-hands"
+    assert "newtenant" in json.loads(out)["message"]
+    assert json.load(open(lock / "lease.json"))["lease_id"] == "newtenant"
+
+
+# ---- a lease made by `gozer adopt` ----
+
+ADOPTED = 5_000_300
+
+
+def adopt_board_zero(env, capsys, monkeypatch):
+    tmp_path, _ = env
+    monkeypatch.setenv("GOZER_PROC_ROOT", fake_proc_tree(
+        tmp_path, {ADOPTED: {"ppid": 1, "devs": [0]}}))
+    code, out = run(["adopt", "0", "--who", "manual:vllm", "--json"], capsys)
+    assert code == 0
+    return json.loads(out)["lease_id"]
+
+
+def test_an_adopted_lease_with_no_device_open_resets_exactly_its_board(env, capsys, monkeypatch):
+    tmp_path, marker = env
+    lease = adopt_board_zero(env, capsys, monkeypatch)
+    # The adopted process exits. fake_proc_tree adds to an existing tree, so
+    # its directory is removed by hand.
+    shutil.rmtree(os.path.join(os.environ["GOZER_PROC_ROOT"], str(ADOPTED)))
+    code, _o = run(["reset", lease], capsys)
+    assert code == 0, _o
+    argv = marker.read_text().split()
+    assert argv[0] == "-r" and set(argv[1].split(",")) == {"0000:01:00.0", "0000:02:00.0"}
+
+
+def test_an_adopted_lease_with_its_process_still_open_exits_15(env, capsys, monkeypatch):
+    _, marker = env
+    lease = adopt_board_zero(env, capsys, monkeypatch)
+    code, out = run(["reset", lease, "--json"], capsys)
+    assert code == 15 and json.loads(out)["status"] == "refused"
+    assert not marker.exists()
+
+
+def test_force_resets_an_adopted_lease_whose_process_is_still_open(env, capsys, monkeypatch):
+    _, marker = env
+    lease = adopt_board_zero(env, capsys, monkeypatch)
+    code, _ = run(["reset", lease, "--force"], capsys)
+    assert code == 0
+    argv = marker.read_text().split()
+    assert set(argv[1].split(",")) == {"0000:01:00.0", "0000:02:00.0"}

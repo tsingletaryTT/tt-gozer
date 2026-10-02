@@ -14,6 +14,7 @@ from gozer import history, keymaster as keymaster_mod
 from gozer.gatekeeper import Gatekeeper
 from gozer.keymaster import Keymaster
 
+RECORD_DISAGREES = "lease record disagrees with its units"
 OWNER = 5_000_100
 CHILD = 5_000_200
 
@@ -294,7 +295,7 @@ def test_a_malformed_chip_id_is_refused_and_runs_nothing(tmp_path, sysfs):
     assert (result.ok, result.status) == (False, "refused")
     assert "not-a-bdf" in result.message and calls == []
     (rec,) = events(gk, "refused")
-    assert rec["action"] == "reset" and rec["reason"] == "lease record has a malformed chip id"
+    assert rec["action"] == "reset" and rec["reason"] == RECORD_DISAGREES
     assert events(gk, "reset") == []
 
 
@@ -407,8 +408,10 @@ def test_force_does_not_override_the_other_tenant_check(tmp_path, sysfs):
 
 
 def test_both_gate_checks_run_under_the_mutex(tmp_path, sysfs):
-    # One check before the reset and one after, each inside the critical
-    # section. A check made outside it could race a claim.
+    # Pins exactly two critical sections by design: the check before the reset
+    # and the check after it. A third would mean the mutex is held for longer
+    # than a gate read needs; one would mean a check ran without the mutex and
+    # could race another agent's claim. Change this number only on purpose.
     km, gk, _ = make(tmp_path, sysfs)
     grant = km.acquire("1", who="orchard:test", pid=OWNER)
     entered = []
@@ -421,3 +424,67 @@ def test_both_gate_checks_run_under_the_mutex(tmp_path, sysfs):
     gk.critical_section = counting
     km.reset(grant.lease_id)
     assert len(entered) == 2
+
+
+# ---- the lease record must agree with the units it claims ----
+
+def two_leases(km):
+    a = km.acquire("1", who="orchard:a", pid=OWNER)
+    b = km.acquire("1", who="claude:b", pid=OWNER)
+    assert set(a.units).isdisjoint(b.units)
+    return a, b
+
+
+def test_a_record_whose_chips_reach_another_leases_chips_is_refused(tmp_path, sysfs):
+    km, gk, calls = make(tmp_path, sysfs)
+    a, b = two_leases(km)
+    _damage(gk, a.lease_id, chips=list(a.bdfs) + list(b.bdfs))
+    result = km.reset(a.lease_id)
+    assert (result.ok, result.status) == (False, "refused")
+    assert "chips" in result.message and b.bdfs[0] in result.message
+    assert calls == []
+    assert gk.unit_lease(b.units[0])["lease_id"] == b.lease_id
+    (rec,) = events(gk, "refused")
+    assert rec["action"] == "reset" and rec["reason"] == RECORD_DISAGREES
+
+
+def test_a_record_whose_dev_indices_reach_another_board_is_refused(tmp_path, sysfs):
+    km, gk, calls = make(tmp_path, sysfs)
+    a, b = two_leases(km)
+    _damage(gk, a.lease_id, dev_indices=list(a.dev_indices) + list(b.dev_indices))
+    result = km.reset(a.lease_id)
+    assert (result.ok, result.status) == (False, "refused")
+    assert "dev_indices" in result.message and calls == []
+
+
+def test_a_record_with_no_dev_indices_is_refused(tmp_path, sysfs):
+    km, gk, calls = make(tmp_path, sysfs)
+    grant = km.acquire("1", who="orchard:test", pid=OWNER)
+    _damage(gk, grant.lease_id, dev_indices=None)
+    result = km.reset(grant.lease_id)
+    assert (result.ok, result.status) == (False, "refused")
+    assert "dev_indices" in result.message and calls == []
+
+
+def test_a_record_that_misses_one_of_its_chips_is_refused(tmp_path, sysfs):
+    km, gk, calls = make(tmp_path, sysfs)
+    grant = km.acquire("1", who="orchard:test", pid=OWNER)
+    _damage(gk, grant.lease_id, chips=list(grant.bdfs)[:1])
+    assert km.reset(grant.lease_id).status == "refused" and calls == []
+
+
+def test_a_unit_the_topology_does_not_know_is_refused(tmp_path, sysfs):
+    km, gk, calls = make(tmp_path, sysfs)
+    grant = km.acquire("1", who="orchard:test", pid=OWNER)
+    _damage(gk, grant.lease_id, units=["ghost-board"])
+    assert km.reset(grant.lease_id).status == "refused" and calls == []
+    (rec,) = events(gk, "refused")
+    assert rec["reason"] == RECORD_DISAGREES
+
+
+def test_force_does_not_skip_the_record_check(tmp_path, sysfs):
+    km, gk, calls = make(tmp_path, sysfs)
+    a, b = two_leases(km)
+    _damage(gk, a.lease_id, chips=list(a.bdfs) + list(b.bdfs))
+    assert km.reset(a.lease_id, force=True).status == "refused" and calls == []
+
