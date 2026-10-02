@@ -69,9 +69,18 @@ may return before the device is released.
 
 Do not run `gozer reset` until the server's own tooling shows that the workload has stopped:
 
-- For tt-model, `tt-model ps` no longer lists it.
-- For plain docker, `docker ps` no longer lists the container.
+- For a container package, `docker ps` no longer lists its container. For example,
+  `docker ps --format '{{.Names}}'` shows no container for the package.
+- For a v5 or v6 bundle server, which is a plain process started by the bundle's `run.sh`,
+  no process of that server remains and its port no longer accepts connections. Use `ps` to
+  look for the server process. Then ask the server's own health endpoint or port, and expect
+  the request to fail.
 - For a test you started yourself, the test runner has exited and you have its exit status.
+
+`tt-model stop` sends SIGTERM first. If the grace period expires and docker has to SIGKILL,
+`tt-model stop` resets the mesh itself with tt-smi from a throwaway container, and it tells you
+that it did. The board lease is still yours either way, and the `gozer reset` below is still
+required. It is your own in-place reset, and it is what the ledger records.
 
 Then run `gozer status` and wait until your chips show `CLAIMED`. `HELD` means a process in
 your tree still has the device open. `HELD-FOREIGN` means a process outside it does.
@@ -135,6 +144,7 @@ Do not use `--force` to clear that. Stop the server first, then run `gozer recon
 
 A server in a container, or one owned by root, is different. gozer cannot read its file
 descriptors, so once the owner pid is dead the lease is reaped and the board shows `FREE`
-while the container still holds the chips. A restarted supervisor must check `tt-model ps` or
-`docker ps` before it takes a new lease, and must not trust `FREE` alone. "Before every reset"
+while the container still holds the chips. A restarted supervisor must check `docker ps` (and,
+for a v5 or v6 bundle server, `ps` for the server process) before it takes a new lease, and
+must not trust `FREE` alone. "Before every reset"
 describes the same limit.

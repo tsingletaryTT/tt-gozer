@@ -209,7 +209,8 @@ def test_a_container_server_gozer_cannot_see_does_not_stop_reset(env, capsys):
     gozer meets for a root-owned process. Before the chmod the server is
     visible, so `status` shows HELD and `reset` refuses. After it `status`
     shows CLAIMED and `reset` goes ahead. The supervisor has to confirm the
-    stop itself (tt-model ps, docker ps) before it resets. The "confirm the
+    stop itself (docker ps for a container, ps and the server's
+    port for a bundle server) before it resets. The "confirm the
     workload has stopped" section of skills/gozer-park/SKILL.md warns about
     this.
 
