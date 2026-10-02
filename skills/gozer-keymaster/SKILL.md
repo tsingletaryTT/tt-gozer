@@ -88,7 +88,7 @@ shell.
 `gozer reset <lease-id>` resets the chips of a lease you hold and keeps the lease.
 Use it when you stop a workload, want clean silicon, and start again on the same
 board. Releasing in between would let another agent take the board. The command
-refuses while any device is open and exits 15. Exit 17 means tt-smi ran and
+refuses while a device is open by one of your own processes and exits 15. gozer cannot see other users' processes, so a board that another user has open is not refused. A reset on a board shared with another tenant's chip can perturb that tenant, as a reset on release can (see the eth-neighbour warning above). Exit 17 means tt-smi ran and
 failed. Exit 18 means the lease was gone or taken by another lease once the
 reset finished. `--force` resets even with a device open. Use it only when a
 person says so.
