@@ -56,6 +56,12 @@ own work (`HELD`). A holder outside that chain is `HELD-FOREIGN`. A server that 
 exits. It drops out of the owner's chain and shows as `HELD-FOREIGN`, so keep the launching
 parent alive.
 
+Start a bundle server in its own process group, so that one check can later cover its worker
+processes: run `setsid <command> &` from a non-interactive shell. There `setsid` runs the
+command itself without forking, so the command stays your child. `$!` is then both its pid and
+its process group id. Record it. (An interactive shell with job control makes `setsid` fork,
+which re-parents the server. Start it from a script instead.)
+
 Treat `HELD-FOREIGN` on your own board as a real alarm: something outside your process tree has
 the device open. A process that exits while gozer reads its parent chain can show
 `HELD-FOREIGN` for a moment. Run `gozer status` once more before acting on it.
@@ -70,25 +76,37 @@ may return before the device is released.
 Do not run `gozer reset` until the server's own tooling shows that the workload has stopped:
 
 - For a container package, no running container may remain for it. List them with
-  `docker ps --format '{{.ID}} {{.Image}} {{.Names}} {{.Ports}}'`. A line belongs to the
-  package if its image id matches the `image <id>` that `tt-model list` prints for that
-  package, or if its published port matches the port you passed to `tt-model serve --port`.
-  As a second check, `docker ps -q | xargs -r docker inspect --format '{{.Name}} {{range .HostConfig.Devices}}{{.PathOnHost}} {{end}}'`
-  prints each running container with the device paths mapped into it. A container that lists
-  `/dev/tenstorrent/<n>` for a chip of your lease still holds the board. This works only for
-  containers started with device mappings. A privileged container, or one with a mounted
-  `/dev` may list none, so use the first check as well.
+  `docker ps --format '{{.ID}} {{.Image}} {{.Names}} {{.Ports}}'`. tt-model names the
+  container `tt-model-<name>-<profile>`. A line belongs to the package if its name matches,
+  if the image column contains the `<id>` that `tt-model list` prints as `image <id>` for the
+  package (the column shows `tt-model/<name>:<id>`), or if its published port matches the
+  port you passed to `tt-model serve --port`.
+  As a second check, this prints each running container with the device paths mapped into it
+  (the command is one long line):
+  `docker ps -q | xargs -r docker inspect --format '{{.Name}} {{range .HostConfig.Devices}}{{.PathOnHost}} {{end}}'`
+  A container that lists `/dev/tenstorrent/<n>` for a chip of your lease still holds the board.
+  So does one that lists `/dev/tenstorrent`, the whole directory, which tt-model maps in some
+  cases. This works only for containers started with device mappings. A privileged container,
+  or one with a mounted `/dev`, may list none, so use the first check as well.
 - For a v5 or v6 bundle server, which is a plain process started by the bundle's `run.sh`,
-  check the process and the port.
-  - Process: you started the server as your own child, so record its pid at start. Afterwards
-    `ps -p <pid>` must list nothing. If you did not record the pid, look at what `run.sh`
-    started and search for it with `ps -eo pid,ppid,args | grep -E '[v]llm|[r]un\.sh'`, replacing
-    the pattern with that command line. The first letter is in brackets so the search does not
-    match its own `grep` process.
+  check the process group, the process and the port.
+  - Process group: vLLM starts engine and worker processes. If the parent dies, they can
+    outlive it, be re-parented, and keep the device open. Use the group id you recorded at
+    start. `pgrep -g <pgid>` must print nothing and exit with status 1. It matches process
+    group ids and not command lines, so it cannot match itself. A worker that left the group
+    (for example one that called `setsid` itself) is not covered. `gozer status` showing your
+    chips as `CLAIMED` (and neither `HELD` nor `HELD-FOREIGN`), and the port checks below, are the other
+    signals.
+  - Process: `ps -p <pid>` prints only the header line and exits with status 1 once the
+    parent is gone. If you did not record the pid, search for what `run.sh` started with
+    `ps -eo pid,ppid,args | grep -E '[v]llm|[r]un\.sh'`. Replace the pattern with that command
+    line and keep the first letter of each word in brackets, so the search does not match its
+    own `grep` process.
   - Port: use the port you passed to `tt-model serve --port <n>` (the default is 20000, and
-    serve walks upward if it is taken). Record it at start. `ss -ltn "( sport = :<n> )"` must
-    print no listening line, and `curl -sS --max-time 3 http://127.0.0.1:<n>/health` must fail
-    to connect.
+    serve walks upward if it is taken). Record it at start. `ss -ltn "( sport = :<n> )"` exits
+    with status 0 whether or not it finds a listener, so look at the output and ignore the exit
+    status. It must print no listening line. `curl -sS --max-time 3 http://127.0.0.1:<n>/health`
+    must fail to connect.
 - For a test you started yourself, the test runner has exited and you have its exit status.
 
 `tt-model stop` sends SIGTERM first. If the grace period expires and docker has to SIGKILL,
