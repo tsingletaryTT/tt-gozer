@@ -69,12 +69,26 @@ may return before the device is released.
 
 Do not run `gozer reset` until the server's own tooling shows that the workload has stopped:
 
-- For a container package, `docker ps` no longer lists its container. For example,
-  `docker ps --format '{{.Names}}'` shows no container for the package.
+- For a container package, no running container may remain for it. List them with
+  `docker ps --format '{{.ID}} {{.Image}} {{.Names}} {{.Ports}}'`. A line belongs to the
+  package if its image id matches the `image <id>` that `tt-model list` prints for that
+  package, or if its published port matches the port you passed to `tt-model serve --port`.
+  As a second check, `docker ps -q | xargs -r docker inspect --format '{{.Name}} {{range .HostConfig.Devices}}{{.PathOnHost}} {{end}}'`
+  prints each running container with the device paths mapped into it. A container that lists
+  `/dev/tenstorrent/<n>` for a chip of your lease still holds the board. This works only for
+  containers started with device mappings. A privileged container, or one with a mounted
+  `/dev` may list none, so use the first check as well.
 - For a v5 or v6 bundle server, which is a plain process started by the bundle's `run.sh`,
-  no process of that server remains and its port no longer accepts connections. Use `ps` to
-  look for the server process. Then ask the server's own health endpoint or port, and expect
-  the request to fail.
+  check the process and the port.
+  - Process: you started the server as your own child, so record its pid at start. Afterwards
+    `ps -p <pid>` must list nothing. If you did not record the pid, look at what `run.sh`
+    started and search for it with `ps -eo pid,ppid,args | grep -E '[v]llm|[r]un\.sh'`, replacing
+    the pattern with that command line. The first letter is in brackets so the search does not
+    match its own `grep` process.
+  - Port: use the port you passed to `tt-model serve --port <n>` (the default is 20000, and
+    serve walks upward if it is taken). Record it at start. `ss -ltn "( sport = :<n> )"` must
+    print no listening line, and `curl -sS --max-time 3 http://127.0.0.1:<n>/health` must fail
+    to connect.
 - For a test you started yourself, the test runner has exited and you have its exit status.
 
 `tt-model stop` sends SIGTERM first. If the grace period expires and docker has to SIGKILL,
@@ -144,7 +158,6 @@ Do not use `--force` to clear that. Stop the server first, then run `gozer recon
 
 A server in a container, or one owned by root, is different. gozer cannot read its file
 descriptors, so once the owner pid is dead the lease is reaped and the board shows `FREE`
-while the container still holds the chips. A restarted supervisor must check `docker ps` (and,
-for a v5 or v6 bundle server, `ps` for the server process) before it takes a new lease, and
-must not trust `FREE` alone. "Before every reset"
-describes the same limit.
+while the container still holds the chips. A restarted supervisor must check
+`docker ps` (and, for a v5 or v6 bundle server, the process and port checks) before it takes a
+new lease, and must not trust `FREE` alone. "Before every reset" describes the same limit.
