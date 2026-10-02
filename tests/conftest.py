@@ -108,10 +108,15 @@ def no_real_proc(monkeypatch):
     real = procfd.holders
 
     def guarded(proc_root="/proc", *args, **kwargs):
-        if proc_root == "/proc":
+        # realpath, not a string compare: "/proc/", "//proc" and "/proc/../proc"
+        # all name the real /proc. (normpath keeps a leading "//", so it
+        # would miss that one.)
+        if os.path.realpath(proc_root) == "/proc":
             raise AssertionError(
                 "this test scans the real /proc; give the Gatekeeper a fake "
-                "proc_root (see fake_proc_tree in conftest.py)")
+                "proc_root (see fake_proc_tree in conftest.py). Pass it as "
+                "proc_root= on Gatekeeper, or set the GOZER_PROC_ROOT "
+                "environment variable for CLI tests")
         return real(proc_root, *args, **kwargs)
 
     monkeypatch.setattr(procfd, "holders", guarded)
