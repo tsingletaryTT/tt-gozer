@@ -202,17 +202,19 @@ def test_release_refuses_while_the_servers_device_is_open(env, capsys):
 @pytest.mark.skipif(os.geteuid() == 0,
                     reason="root can list a mode-0 directory, so the server would stay visible")
 def test_a_container_server_gozer_cannot_see_does_not_stop_reset(env, capsys):
-    """KNOWN LIMIT, pinned on purpose. gozer reads /proc/<pid>/fd as the calling
-    user, so a device handle held by a root-owned container process is
-    invisible to it. The server below is alive and holds the device. Its fd
-    directory is then made unreadable (mode 0), which is what an unprivileged
-    gozer meets for a root-owned process. Before the chmod the server is
-    visible, so `status` shows HELD and `reset` refuses. After it `status`
-    shows CLAIMED and `reset` goes ahead. The supervisor has to confirm the
-    stop itself (docker ps for a container, ps and the server's
-    port for a bundle server) before it resets. The "confirm the
-    workload has stopped" section of skills/gozer-park/SKILL.md warns about
-    this.
+    """KNOWN LIMIT, pinned on purpose. This test models a container whose
+    processes belong to another user. gozer reads /proc/<pid>/fd as the
+    calling user, so it cannot read the fd directory of such a process. The
+    server below is alive and holds the device. Its fd directory is then made
+    unreadable (mode 0). Before the chmod the server is visible, so `status`
+    shows HELD and `reset` refuses. After it `status` shows CLAIMED and
+    `reset` goes ahead. On the real box docker runs the container's server as
+    the same user, so a real `tt-model serve` container is visible as
+    HELD-FOREIGN. This test pins what gozer does when it cannot read the fd
+    directory. The supervisor has to confirm the stop itself (docker ps for a
+    container, ps and the server's port for a bundle server) before it
+    resets. The "confirm the workload has stopped" section of
+    skills/gozer-park/SKILL.md covers this.
 
     This test pins a known limit. Revisit it if gozer ever refuses or warns for
     an unreadable fd directory, or gains root-visible scanning."""
