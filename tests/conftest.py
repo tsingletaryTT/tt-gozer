@@ -108,7 +108,7 @@ def no_real_proc(monkeypatch):
     real = procfd.holders
 
     def guarded(proc_root="/proc", *args, **kwargs):
-        # realpath, not a string compare: "/proc/", "//proc" and "/proc/../proc"
+        # Compare the resolved path, because "/proc/", "//proc" and "/proc/../proc"
         # all name the real /proc. (normpath keeps a leading "//", so it
         # would miss that one.)
         if os.path.realpath(proc_root) == "/proc":

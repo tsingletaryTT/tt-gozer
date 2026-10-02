@@ -501,7 +501,7 @@ class Keymaster:
             # A chip id that is not a PCI address can only come from topology
             # itself (a dangling sysfs device link gives the basename "device").
             # reset_command refuses before running anything, so report that as
-            # a refusal rather than letting the exception reach the CLI.
+            # a refusal. Letting the exception through would end in a traceback.
             bad_ids = [c for c in chips if not reset_mod.BDF_RE.match(c)]
             history.log(self.gk.history_root, "refused", action="reset",
                        lease_id=lease_id, who=lease.get("who"),
