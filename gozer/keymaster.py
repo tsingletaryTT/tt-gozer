@@ -55,6 +55,17 @@ class Grant:
     neighbours: dict[str, str] = field(default_factory=dict)
 
 
+@dataclass
+class ResetResult:
+    """Outcome of Keymaster.reset. `status` is one of: "reset" (ok),
+    "not-found", "refused" (nothing was done), "failed" (tt-smi ran and
+    failed) and "changed-hands" (the reset ran, and afterwards the lease was
+    found gone or taken by another lease)."""
+    ok: bool
+    status: str
+    message: str
+
+
 class Keymaster:
     def __init__(self, gatekeeper: Gatekeeper):
         self.gk = gatekeeper
@@ -385,6 +396,97 @@ class Keymaster:
                    duration_s=duration_s, reset_ran=reset_ran,
                    reset_ok=reset_ok if reset_ran else None)
         return True, "; ".join(m for m in messages if m)
+
+    def reset(self, lease_id: str, force: bool = False) -> ResetResult:
+        """Reset a held lease's chips and keep the lease.
+
+        Used by a supervisor that stops one model server, runs something else
+        on the same board, and starts a server again, without ever letting go
+        of the board. Releasing in between would let another agent take it.
+
+        The structure follows `release`: refuse while a device is open; re-read
+        the gate under the mutex before the reset so it never fires at chips
+        another tenant now holds; drop the mutex for the reset itself (tt-smi
+        takes tens of seconds); re-read the gate once more afterwards. It does
+        not mark the unit clean, touch the queue, or open a claim window,
+        because the lease continues and `release` resets again.
+        """
+        lease = self.gk.read_lease(lease_id)
+        if lease is None:
+            return ResetResult(False, "not-found", f"lease {lease_id} not found")
+        units = lease.get("units", [])
+        chips = lease.get("chips", [])
+        if not units or not chips:
+            # A record with nothing to check or nothing to reset cannot be
+            # verified against the gate, so firing a reset from it would be a
+            # guess. Refuse; `release` still cleans such a record up.
+            history.log(self.gk.history_root, "refused", action="reset",
+                       lease_id=lease_id, who=lease.get("who"),
+                       reason="lease record has no units or chips")
+            return ResetResult(False, "refused", (
+                f"lease {lease_id} has no units or chips recorded; "
+                "nothing was reset"))
+
+        fd_map = procfd.holders(self.gk.proc_root)
+        still_open = [d for d in lease.get("dev_indices", []) if fd_map.get(d)]
+        if still_open and not force:
+            history.log(self.gk.history_root, "refused", action="reset",
+                       lease_id=lease_id, who=lease.get("who"),
+                       reason="device still open", dev_indices=still_open)
+            return ResetResult(False, "refused", (
+                f"chips {still_open} still open by "
+                f"{sorted({p for d in still_open for p in fd_map[d]})} -- "
+                "stop the workload first, or pass --force"))
+
+        with self.gk.critical_section():
+            foreign = self._units_held_elsewhere(units, lease_id)
+            unheld = [u for u in units if self.gk.unit_lease(u) is None]
+        if foreign:
+            history.log(self.gk.history_root, "refused", action="reset",
+                       lease_id=lease_id, who=lease.get("who"),
+                       reason="units now belong to another lease", foreign=foreign)
+            return ResetResult(False, "refused", (
+                "refusing to reset: " +
+                ", ".join(f"{unit} now belongs to lease {other}"
+                          for unit, other in sorted(foreign.items())) +
+                f" -- lease {lease_id} was already reaped or released; nothing was reset"))
+        if unheld:
+            # Our lock is gone and nobody holds the unit. A reset now would land
+            # on whoever takes these chips next, so do nothing.
+            history.log(self.gk.history_root, "refused", action="reset",
+                       lease_id=lease_id, who=lease.get("who"),
+                       reason="unit no longer locked by this lease", unheld=unheld)
+            return ResetResult(False, "refused", (
+                f"refusing to reset: {', '.join(sorted(unheld))} no longer locked "
+                f"by lease {lease_id} (already reaped?); nothing was reset"))
+
+        try:
+            reset_ok, out = reset_mod.reset_chips(chips, runner=self.reset_runner)
+        except reset_mod.ResetError as e:
+            # A malformed chip id is rejected before any command is built, so
+            # nothing ran. That is a refusal, not a failed reset.
+            history.log(self.gk.history_root, "refused", action="reset",
+                       lease_id=lease_id, who=lease.get("who"),
+                       reason="lease record has a malformed chip id")
+            return ResetResult(False, "refused", f"{e}; nothing was reset")
+        message = out or ("reset ok" if reset_ok else "reset failed")
+
+        with self.gk.critical_section():
+            foreign = self._units_held_elsewhere(units, lease_id)
+            unheld = [u for u in units if self.gk.unit_lease(u) is None]
+        history.log(self.gk.history_root, "reset", lease_id=lease_id,
+                   who=lease.get("who"), chips=chips, reset_ok=reset_ok)
+        if foreign:
+            return ResetResult(False, "changed-hands", "; ".join([message,
+                "discovered after the reset: " +
+                ", ".join(f"{unit} now belongs to lease {other}"
+                          for unit, other in sorted(foreign.items())) +
+                " -- leaving the new tenant's lock alone"]))
+        if unheld:
+            return ResetResult(False, "changed-hands", "; ".join([message,
+                f"discovered after the reset: lease {lease_id} was reaped while "
+                "the reset ran"]))
+        return ResetResult(reset_ok, "reset" if reset_ok else "failed", message)
 
     # ---- env and run ------------------------------------------------------
 

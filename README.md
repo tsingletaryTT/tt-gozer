@@ -119,6 +119,7 @@ $ gozer history -n 5
 | `cancel <ticket>` | drop a queue ticket |
 | `renew <lease> --expect D` | extend a lease's advisory deadline |
 | `release` / `banish <lease>` [`--no-reset`] [`--force`] | give chips back (resets them) |
+| `reset <lease>` [`--force`] | reset the lease's chips in place and keep the lease; refuses while a device is open |
 | `reconcile` [`--sudo`] | re-derive state from kernel truth, reaping what is genuinely dead |
 | `adopt <target> --who W` | wrap a lease around untracked running work |
 | `env <lease>` | print export lines for a lease |
@@ -163,6 +164,8 @@ carry the outcome, so no output parsing is required:
 | `14` | topology unreadable |
 | `15` | release refused, nothing done — a device is still open, or the lease's units now belong to someone else |
 | `16` | the allocator mutex is stuck; the message names the path to clear |
+| `17` | `reset` ran tt-smi and it failed; the lease is still held |
+| `18` | `reset` ran, and afterwards the lease was gone or another lease held its chips; the reset may have hit chips that were no longer yours |
 | `130` | `gozer run` was interrupted by a signal (128 + SIGINT); the lease was still released |
 
 Waiting is designed around agents: `acquire` never blocks, so an agent gets a ticket and can
@@ -275,7 +278,7 @@ they read the output. If `status` shows `STALE`, run `gozer reconcile` to clear 
   queue/.claim-window            ticket entitled to claim, 90s expiry
   mutex/.gatekeeper.lock/        allocator mutex, self-heals after 30s
   history.jsonl                  append-only log: granted, queued, released,
-                                  reaped, adopted, refused -- one JSON object
+                                  reset, reaped, adopted, refused -- one JSON object
                                   per line, forever (see below)
 ```
 

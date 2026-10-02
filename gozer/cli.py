@@ -45,6 +45,12 @@ EXIT_RELEASE_REFUSED = 15
 # therefore surfaces here rather than as a traceback, from whichever of the
 # commands above the gatekeeper skill sends someone to run.
 EXIT_GATE_STUCK = 16
+# `gozer reset` ran tt-smi and it failed. The lease is untouched.
+EXIT_RESET_FAILED = 17
+# `gozer reset` ran, and afterwards the lease was gone or another lease held the
+# unit. The reset may have hit chips that were no longer ours. Distinct from 15,
+# which means nothing was done.
+EXIT_RESET_CHANGED_HANDS = 18
 # Conventional 128 + SIGINT, for `gozer run` interrupted by a signal.
 EXIT_INTERRUPTED = 130
 
@@ -319,6 +325,22 @@ def cmd_release(args) -> int:
     return EXIT_NO_LEASE if "not found" in msg else EXIT_RELEASE_REFUSED
 
 
+def cmd_reset(args) -> int:
+    _, km = _make(args)
+    result = km.reset(args.lease, force=args.force)
+    _emit({"reset": result.ok, "status": result.status, "message": result.message},
+          result.message, args.json)
+    if result.ok:
+        return EXIT_OK
+    if result.status == "not-found":
+        return EXIT_NO_LEASE
+    if result.status == "failed":
+        return EXIT_RESET_FAILED
+    if result.status == "changed-hands":
+        return EXIT_RESET_CHANGED_HANDS
+    return EXIT_RELEASE_REFUSED     # "refused": nothing was done
+
+
 def cmd_reconcile(args) -> int:
     gk, _ = _make(args)
     if args.sudo:
@@ -515,6 +537,12 @@ def build_parser() -> argparse.ArgumentParser:
         rel.add_argument("--no-reset", action="store_true")
         rel.add_argument("--force", action="store_true",
                          help="release even while a device is open")
+
+    rs = add("reset", cmd_reset,
+             "reset a held lease's chips in place; the lease stays held")
+    rs.add_argument("lease")
+    rs.add_argument("--force", action="store_true",
+                    help="reset even if a device is still open")
 
     rec = add("reconcile", cmd_reconcile, "re-derive state from kernel truth")
     rec.add_argument("--sudo", action="store_true",

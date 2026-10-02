@@ -83,6 +83,16 @@ you want the plain `acquire` above (or better, `gozer run`) — passing your own
 when you are also the workload buys nothing and hides a crash behind a still-live
 shell.
 
+### Resetting without releasing
+
+`gozer reset <lease-id>` resets the chips of a lease you hold and keeps the lease.
+Use it when you stop a workload, want clean silicon, and start again on the same
+board. Releasing in between would let another agent take the board. The command
+refuses while any device is open and exits 15. Exit 17 means tt-smi ran and
+failed. Exit 18 means the lease was gone or taken by another lease once the
+reset finished. `--force` resets even with a device open. Use it only when a
+person says so.
+
 ## When you are queued (exit code 10)
 
 You get a ticket and a position. **Do not spin.** Go do work that does not need
