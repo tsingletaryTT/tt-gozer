@@ -78,7 +78,8 @@ who the container's processes run as. A container whose processes it cannot read
 On this box a container started with `tt-model serve` has its server process (`python -m
 uvicorn ...`) running as the same user, under a root `containerd-shim-runc-v2`. gozer reads that
 process, which is not your descendant, so `gozer status` shows the chip as `HELD-FOREIGN` and
-`gozer reset` refuses. That is the expected picture for such a container, because the container
+`gozer reset` would refuse (not tried, because a reset under a live server can wedge the
+board). That is the expected picture for such a container, because the container
 is never your child. It is no sign that the lease is wrong. After `tt-model stop`, the chip
 showed `CLAIMED`. Confirm the stop with docker as described below, and do not rely on gozer's
 view in either direction. A stop command may return before the device is released.
@@ -141,18 +142,21 @@ covers only your own processes.
 
 `tt-smi -r` opens every device on the box while it resets. During a `gozer reset` or
 `gozer release`, which took about 42 seconds here, the other board shows `BUSY-UNTRACKED` in
-`gozer status`, with the reset's pid as holder. A neighbour's preflight or `gozer acquire` sees
+`gozer status`, with the `tt-smi` process as holder. A neighbour's preflight or `gozer acquire` sees
 that board as busy for that time. Do not preflight or acquire a board while another board's
 reset is running. Retry after it ends. Two supervisors should not overlap their resets.
 
 ## Measured timings
 
-Measured on 2026-10-02 on this box, one p300c board, package `episod/audio8-asr-infinite-p150`:
+Measured on 2026-10-02 on this box, one p300c board. The reset and release timings come from
+the hardware-check driver, where a ttnn child process opened and closed a device on the board
+before each reset, and from the container check. They do not depend on the package. The stop and
+boot rows are from the Audio8 container package `episod/audio8-asr-infinite-p150`.
 
 | Step | Time |
 |---|---|
-| `gozer reset` (about nine runs) | 41.6 to 41.7 s |
-| `gozer release`, including its reset | 41.6 to 41.7 s |
+| `gozer reset` (7 runs) | 41.6 to 41.7 s |
+| `gozer release`, including its reset (4 runs) | 41.6 to 41.7 s |
 | `tt-model stop`, clean shutdown, no mesh reset | 1.6 to 1.9 s |
 | container warm boot to ready | 19.6 to 20.3 s |
 
