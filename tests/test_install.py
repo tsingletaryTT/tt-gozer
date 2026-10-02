@@ -244,19 +244,42 @@ def test_gozer_park_skill_names_only_tt_model_verbs_that_exist():
         assert verb in TT_MODEL_VERBS, f"skill names unknown tt-model verb: {span}"
 
 
-# Verbs of docker and tools the skill may name in backticks. Keep it small.
+# Verbs of docker the skill may name in backticks. Keep it small.
 DOCKER_VERBS = {"ps", "inspect", "logs", "stop", "images", "info"}
-KNOWN_TOOLS = {"ss", "ps", "curl", "docker", "gozer", "tt-model", "grep", "xargs"}
+# Tools the skill names in backticked command lines. Each must be installed
+# for the install check below to run.
+SKILL_TOOLS = ["docker", "ps", "pgrep", "ss", "curl", "setsid", "grep", "xargs"]
 
 
-def test_gozer_park_skill_names_only_real_docker_verbs_and_known_tools():
+def test_gozer_park_skill_names_only_real_docker_verbs():
+    """Every `docker <verb>` anywhere inside a backticked span, including
+    inside a pipeline, must use a verb from DOCKER_VERBS."""
     import re
     text = open(PARK_SKILL).read()
-    spans = re.findall(r"`(docker\s[^`]*)`", text)
-    assert spans, "skill no longer names any docker command"
-    for span in spans:
-        verb = span.split()[1]
-        assert verb in DOCKER_VERBS, f"skill names unknown docker verb: {span}"
-    # A backticked ss or ps command must start with a known tool.
-    for span in re.findall(r"`((?:ss|ps)\s[^`]*)`", text):
-        assert span.split()[0] in KNOWN_TOOLS, span
+    found = []
+    for span in re.findall(r"`([^`]*)`", text):
+        for m in re.finditer(r"\bdocker\s+([a-z][\w-]*)", span):
+            found.append(m.group(0))
+            assert m.group(1) in DOCKER_VERBS, f"unknown docker verb in: {span}"
+    assert found, "skill no longer names any docker command"
+
+
+def test_gozer_park_skill_command_spans_parse_and_tools_exist():
+    """Each backticked span that starts with a tool the skill uses must parse
+    with shlex (balanced quotes). This does not prove the flags are valid; the
+    commands were run by hand on a real box when the skill was written. The
+    tools named in the skill must be installed where the test runs, and the
+    check skips with a reason if one is missing."""
+    import re
+    import shlex
+    import shutil
+    text = open(PARK_SKILL).read()
+    checked = 0
+    for span in re.findall(r"`([^`]*)`", text):
+        if span.split(" ")[0] in SKILL_TOOLS:
+            shlex.split(span.replace("<", "x").replace(">", "x"))
+            checked += 1
+    assert checked, "no tool command spans found"
+    missing = [t for t in SKILL_TOOLS if shutil.which(t) is None]
+    if missing:
+        pytest.skip(f"tools not installed here: {missing}")
