@@ -216,7 +216,7 @@ def test_a_cycle_ends_the_walk_at_the_first_repeat_not_at_max_depth(tmp_path, mo
 
 
 def test_a_cycle_that_does_not_include_the_start_ends_at_the_first_repeat(tmp_path, monkeypatch):
-    # CHILD -> A -> B -> A: the repeat is A, not the start pid.
+    # CHILD -> A -> B -> A: the first repeated pid is A. The start pid is never repeated.
     import gozer.procfd as procfd
     a, b = 5_000_500, 5_000_600
     root = fake_proc_tree(tmp_path, {CHILD: {"ppid": a}, a: {"ppid": b}, b: {"ppid": a}})
@@ -242,3 +242,19 @@ def test_pid_zero_is_never_an_ancestor(tmp_path):
     # owner must not match every such process.
     root = fake_proc_tree(tmp_path, {CHILD: {"ppid": 0}})
     assert is_descendant(CHILD, 0, root) is False
+
+
+def test_the_default_max_depth_stops_a_100_deep_chain(tmp_path):
+    # The owner sits 100 parents above the start, past the default of 64.
+    procs = {5_002_000 + i: {"ppid": 5_002_000 + i + 1} for i in range(100)}
+    procs[5_002_100] = {"ppid": OWNER}
+    procs[OWNER] = {"ppid": 1}
+    root = fake_proc_tree(tmp_path, procs)
+    assert is_descendant(5_002_000, OWNER, root) is False
+    assert is_descendant(5_002_000, OWNER, root, max_depth=200) is True
+
+
+def test_parent_pid_is_none_for_a_ppid_line_with_no_value(tmp_path):
+    root = fake_proc_tree(tmp_path, {CHILD: {"ppid": OWNER}})
+    (tmp_path / "proc" / str(CHILD) / "status").write_text("Name:\tpython\nPPid:\n")
+    assert parent_pid(CHILD, root) is None

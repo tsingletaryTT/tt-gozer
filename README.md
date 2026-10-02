@@ -246,6 +246,9 @@ unprivileged gozer can never see, so a detached lease taken on its behalf would 
 `--owner-pid` and the lease is judged by that pid's liveness instead, exactly like `gozer
 run`'s: `CLAIMED` for as long as the supervisor lives, no fd or grace window needed. A
 non-positive pid, or one that is not alive right now, is refused rather than accepted.
+Pass the supervisor's own pid, not a shell's or pid 1, because every process the owner ever
+launched counts as the owner's own. For owner pid 1 only the pid itself and its process-group
+leader count.
 
 Reaping is deliberately conservative: a non-detached lease is removed only when its process is
 **gone** *and* no file descriptor remains; a detached lease is removed only once its grace

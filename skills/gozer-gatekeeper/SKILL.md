@@ -24,7 +24,7 @@ What to do about each, which the README does not say:
 
 - `FREE` — acquire it.
 - `HELD`, `CLAIMED` — nothing. Working as intended.
-- `HELD-FOREIGN` — a device holder that is neither the lease owner nor a descendant of it. Investigate before anything else; the lease is lying.
+- `HELD-FOREIGN` — a device holder that is neither the lease owner, the owner's process-group leader, nor a descendant of the owner. Investigate before anything else; the lease is lying. Re-run `gozer status` once before acting, because a process that exits while gozer reads its parent chain can show `HELD-FOREIGN` for a moment.
 - `BUSY-UNTRACKED` — do not take it. Adopt it (below).
 - `STALE` — `status` reports it but deliberately leaves it on disk (it never mutates state).
   Clear it with `gozer reconcile`.
@@ -79,7 +79,9 @@ leave it alone.
 **Not every lease with an owning pid came from `gozer run`.** `gozer acquire
 --owner-pid N` produces a non-detached lease whose owner is a *supervisor* —
 something that took the lease and then launched the real workload elsewhere
-(`tt-station-agentd` and its serving container are the motivating case). Two
+(`tt-station-agentd` and its serving container are the motivating case). A supervisor
+passes its own pid, not a shell's or pid 1, because every process the owner ever launched counts as
+the owner's own. Two
 consequences when you are reading such a lease:
 
 - **No fd is not evidence of a dead lease here.** The workload may be a
