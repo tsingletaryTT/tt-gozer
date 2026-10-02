@@ -98,3 +98,26 @@ def test_a_lease_with_no_owner_pid_never_asks_about_descendants(tmp_path, sysfs,
         raise AssertionError("is_descendant called for a lease with no owner")
     monkeypatch.setattr(procfd, "is_descendant", boom)
     assert state_of(gk, 0) == "HELD-FOREIGN"
+
+
+def board_owned_by_pid_one(tmp_path, sysfs):
+    """A non-detached lease whose owner pid is 1, which is accepted today."""
+    gk = Gatekeeper(root=str(tmp_path / "state"), sysfs_root=sysfs(QUIETBOX),
+                    proc_root=fake_proc_tree(tmp_path, {1: {"ppid": 0}}))
+    grant = Keymaster(gk).acquire("1", who="orchard:test", pid=1)
+    assert 0 in grant.dev_indices
+    return gk
+
+
+def test_an_owner_of_pid_one_does_not_own_every_process(tmp_path, sysfs):
+    # Every process descends from pid 1, so counting its descendants would
+    # make HELD-FOREIGN impossible for such a lease.
+    gk = board_owned_by_pid_one(tmp_path, sysfs)
+    fake_proc_tree(tmp_path, {1: {"ppid": 0}, STRANGER: {"ppid": 1, "devs": [0]}})
+    assert state_of(gk, 0) == "HELD-FOREIGN"
+
+
+def test_an_owner_of_pid_one_holding_the_device_itself_is_held(tmp_path, sysfs):
+    gk = board_owned_by_pid_one(tmp_path, sysfs)
+    fake_proc_tree(tmp_path, {1: {"ppid": 0, "devs": [0]}})
+    assert state_of(gk, 0) == "HELD"
