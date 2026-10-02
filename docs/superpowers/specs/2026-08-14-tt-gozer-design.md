@@ -343,7 +343,7 @@ For each chip: `fd_busy` = does any process hold `/dev/tenstorrent/N` open (scan
 | leased | fd open | state | action |
 |--------|---------|-------|--------|
 | ✓ | by the lease's pid/pgid | **HELD** | leave alone |
-| ✓ | by another pid | **HELD-FOREIGN** | flag loudly; never reallocate |
+| ✓ | by a pid that is not the owner, the owner's process-group leader or a descendant of the owner | **HELD-FOREIGN** | flag loudly; never reallocate |
 | ✓ | none, pid alive | **CLAIMED** | honour — setup phase or between runs |
 | ✓ | none, pid dead | **STALE** | reaped by `acquire`/`reconcile`; `status` reports it but leaves it on disk (see below); mark board dirty (needs reset) |
 | ✗ | yes | **BUSY-UNTRACKED** | never allocate; suggest `gozer adopt` |

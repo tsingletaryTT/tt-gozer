@@ -493,7 +493,16 @@ class Gatekeeper:
                     # `gozer run`), where we really do know who should hold it.
                     state = "HELD"
                 else:
-                    owned = any(p == owner or p == owner_pgid for p in pids)
+                    # A holder counts as the owner's own when it is the owner
+                    # pid, the owner's process-group leader, or any descendant
+                    # of the owner. The descendant case is a supervisor that
+                    # starts the model server as its child: the lease is held
+                    # under the supervisor's pid and the child opens the device.
+                    owned = any(
+                        p == owner or p == owner_pgid
+                        or (owner is not None
+                            and procfd.is_descendant(p, owner, self.proc_root))
+                        for p in pids)
                     state = "HELD" if owned else "HELD-FOREIGN"
             elif detached:
                 since = lease.get("since")

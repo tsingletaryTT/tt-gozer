@@ -24,7 +24,7 @@ What to do about each, which the README does not say:
 
 - `FREE` — acquire it.
 - `HELD`, `CLAIMED` — nothing. Working as intended.
-- `HELD-FOREIGN` — investigate before anything else; the lease is lying.
+- `HELD-FOREIGN` — a device holder that is neither the lease owner nor a descendant of it. Investigate before anything else; the lease is lying.
 - `BUSY-UNTRACKED` — do not take it. Adopt it (below).
 - `STALE` — `status` reports it but deliberately leaves it on disk (it never mutates state).
   Clear it with `gozer reconcile`.

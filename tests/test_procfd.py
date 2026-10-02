@@ -137,3 +137,108 @@ def test_failed_sudo_degrades_to_same_user_truth(tmp_path):
 
     assert procfd.holders(p, use_sudo=True,
                           runner=lambda *a, **k: Failed()) == {1: [100]}
+
+
+from conftest import fake_proc_tree
+from gozer.procfd import is_descendant, parent_pid
+
+OWNER = 5_000_100       # far above any real pid_max, so these never name a real process
+CHILD = 5_000_200
+GRANDCHILD = 5_000_300
+STRANGER = 5_000_400
+
+
+def test_parent_pid_reads_the_ppid_line(tmp_path):
+    root = fake_proc_tree(tmp_path, {CHILD: {"ppid": OWNER}})
+    assert parent_pid(CHILD, root) == OWNER
+
+
+def test_parent_pid_is_none_for_a_missing_process(tmp_path):
+    root = fake_proc_tree(tmp_path, {})
+    assert parent_pid(CHILD, root) is None
+
+
+def test_parent_pid_is_none_for_an_unreadable_or_malformed_status(tmp_path):
+    root = fake_proc_tree(tmp_path, {CHILD: {"ppid": OWNER}})
+    (tmp_path / "proc" / str(CHILD) / "status").write_text("Name:\tpython\nPPid:\tnot-a-number\n")
+    assert parent_pid(CHILD, root) is None
+    (tmp_path / "proc" / str(CHILD) / "status").write_text("Name:\tpython\n")
+    assert parent_pid(CHILD, root) is None
+
+
+def test_a_child_and_a_grandchild_descend_from_the_owner(tmp_path):
+    root = fake_proc_tree(tmp_path, {
+        OWNER: {"ppid": 1}, CHILD: {"ppid": OWNER}, GRANDCHILD: {"ppid": CHILD}})
+    assert is_descendant(CHILD, OWNER, root) is True
+    assert is_descendant(GRANDCHILD, OWNER, root) is True
+
+
+def test_a_process_is_not_its_own_descendant(tmp_path):
+    root = fake_proc_tree(tmp_path, {OWNER: {"ppid": 1}})
+    assert is_descendant(OWNER, OWNER, root) is False
+
+
+def test_an_unrelated_process_does_not_descend_from_the_owner(tmp_path):
+    root = fake_proc_tree(tmp_path, {OWNER: {"ppid": 1}, STRANGER: {"ppid": 1}})
+    assert is_descendant(STRANGER, OWNER, root) is False
+
+
+def test_a_chain_that_ends_at_a_missing_process_is_not_a_descendant(tmp_path):
+    # CHILD names a parent that no longer exists, so the walk cannot reach OWNER.
+    root = fake_proc_tree(tmp_path, {CHILD: {"ppid": STRANGER}})
+    assert is_descendant(CHILD, OWNER, root) is False
+
+
+def test_a_cycle_in_the_parent_chain_terminates(tmp_path):
+    root = fake_proc_tree(tmp_path, {CHILD: {"ppid": GRANDCHILD}, GRANDCHILD: {"ppid": CHILD}})
+    assert is_descendant(CHILD, OWNER, root) is False
+
+
+def test_the_walk_stops_at_max_depth(tmp_path):
+    procs = {5_001_000 + i: {"ppid": 5_001_000 + i + 1} for i in range(10)}
+    procs[5_001_010] = {"ppid": OWNER}
+    procs[OWNER] = {"ppid": 1}
+    root = fake_proc_tree(tmp_path, procs)
+    assert is_descendant(5_001_000, OWNER, root, max_depth=20) is True
+    assert is_descendant(5_001_000, OWNER, root, max_depth=3) is False
+
+
+def test_a_cycle_ends_the_walk_at_the_first_repeat_not_at_max_depth(tmp_path, monkeypatch):
+    # max_depth alone would also end a cycle, only after 64 reads. Count the
+    # reads so the repeated-pid stop is what is being checked.
+    import gozer.procfd as procfd
+    root = fake_proc_tree(tmp_path, {CHILD: {"ppid": GRANDCHILD}, GRANDCHILD: {"ppid": CHILD}})
+    reads = []
+    real = procfd.parent_pid
+    monkeypatch.setattr(procfd, "parent_pid", lambda pid, r="/proc": (reads.append(pid), real(pid, r))[1])
+    assert procfd.is_descendant(CHILD, OWNER, root) is False
+    assert len(reads) <= 3
+
+
+def test_a_cycle_that_does_not_include_the_start_ends_at_the_first_repeat(tmp_path, monkeypatch):
+    # CHILD -> A -> B -> A: the repeat is A, not the start pid.
+    import gozer.procfd as procfd
+    a, b = 5_000_500, 5_000_600
+    root = fake_proc_tree(tmp_path, {CHILD: {"ppid": a}, a: {"ppid": b}, b: {"ppid": a}})
+    reads = []
+    real = procfd.parent_pid
+    monkeypatch.setattr(procfd, "parent_pid", lambda pid, r="/proc": (reads.append(pid), real(pid, r))[1])
+    assert procfd.is_descendant(CHILD, OWNER, root) is False
+    assert len(reads) <= 4
+
+
+def test_a_process_whose_parent_is_itself_ends_after_one_read(tmp_path, monkeypatch):
+    import gozer.procfd as procfd
+    root = fake_proc_tree(tmp_path, {CHILD: {"ppid": CHILD}})
+    reads = []
+    real = procfd.parent_pid
+    monkeypatch.setattr(procfd, "parent_pid", lambda pid, r="/proc": (reads.append(pid), real(pid, r))[1])
+    assert procfd.is_descendant(CHILD, OWNER, root) is False
+    assert len(reads) <= 1
+
+
+def test_pid_zero_is_never_an_ancestor(tmp_path):
+    # ppid 0 means "no parent" (kernel threads). A caller passing 0 as the
+    # owner must not match every such process.
+    root = fake_proc_tree(tmp_path, {CHILD: {"ppid": 0}})
+    assert is_descendant(CHILD, 0, root) is False

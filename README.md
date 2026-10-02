@@ -222,8 +222,8 @@ Six states, derived from comparing the lease files against the kernel:
 
 | Lease? | fd open? | State | Meaning |
 |---|---|---|---|
-| ✓ | by the owner | `HELD` | working as intended |
-| ✓ | by someone else | `HELD-FOREIGN` | the lease is lying — investigate |
+| ✓ | by the owner or a descendant of the owner | `HELD` | working as intended |
+| ✓ | by a pid that is not the owner, the owner's process-group leader or a descendant of the owner | `HELD-FOREIGN` | the lease is lying — investigate |
 | ✓ | none, owner alive (or, for a detached lease, still inside its 900s grace window) | `CLAIMED` | setup phase, or between runs |
 | ✓ | none, owner gone (or, for a detached lease, its 900s grace window elapsed) | `STALE` | reaped by `acquire` or `reconcile` — `status` reports it but leaves it on disk; clear it with `gozer reconcile` |
 | ✗ | yes | `BUSY-UNTRACKED` | untracked work — never handed out |

@@ -112,6 +112,46 @@ def pid_alive(pid: int, proc_root: str = "/proc") -> bool:
     return os.path.isdir(os.path.join(proc_root, str(pid)))
 
 
+def parent_pid(pid: int, proc_root: str = "/proc") -> int | None:
+    """The parent of `pid`, read from the `PPid:` line of /proc/<pid>/status.
+
+    status is parsed rather than /proc/<pid>/stat because stat's second field
+    is the process name in parentheses, and a name can itself contain spaces
+    and parentheses. Returns None when the process is gone, the file cannot be
+    read, or the line is missing or malformed: the caller treats all of those
+    as "no known parent".
+    """
+    try:
+        with open(os.path.join(proc_root, str(pid), "status")) as f:
+            for line in f:
+                if line.startswith("PPid:"):
+                    return int(line.split()[1])
+    except (OSError, ValueError, IndexError):
+        return None
+    return None
+
+
+def is_descendant(pid: int, ancestor: int, proc_root: str = "/proc",
+                  max_depth: int = 64) -> bool:
+    """True when `ancestor` appears in the parent chain above `pid`.
+
+    A process is not its own descendant. The walk stops at a missing process,
+    at a repeated pid (a cycle), and after `max_depth` steps, so a malformed
+    tree cannot make it loop.
+    """
+    seen = {pid}
+    current = pid
+    for _ in range(max_depth):
+        parent = parent_pid(current, proc_root)
+        if parent is None or parent <= 0 or parent in seen:
+            return False
+        if parent == ancestor:
+            return True
+        seen.add(parent)
+        current = parent
+    return False
+
+
 def process_name(pid: int, proc_root: str = "/proc") -> str:
     try:
         with open(os.path.join(proc_root, str(pid), "comm")) as f:
