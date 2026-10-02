@@ -235,3 +235,15 @@ def test_force_resets_an_adopted_lease_whose_process_is_still_open(env, capsys, 
     assert code == 0
     argv = marker.read_text().split()
     assert set(argv[1].split(",")) == {"0000:01:00.0", "0000:02:00.0"}
+
+
+def test_a_chip_id_that_is_not_a_pci_address_exits_15_and_runs_nothing(env, capsys, monkeypatch):
+    import re
+    from gozer import reset as reset_mod
+    _, marker = env
+    lease = take_lease(capsys)
+    monkeypatch.setattr(reset_mod, "BDF_RE", re.compile(r"^never-matches$"))
+    code, out = run(["reset", lease, "--json"], capsys)
+    assert code == 15 and json.loads(out)["status"] == "refused"
+    assert "nothing was reset" in json.loads(out)["message"]
+    assert not marker.exists()

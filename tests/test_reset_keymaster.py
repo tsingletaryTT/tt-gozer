@@ -284,7 +284,10 @@ def test_a_lease_record_with_empty_units_or_chips_is_refused(tmp_path, sysfs, fi
     km, gk, calls = make(tmp_path, sysfs)
     grant = km.acquire("1", who="orchard:test", pid=OWNER)
     _damage(gk, grant.lease_id, **{field: []})
-    assert km.reset(grant.lease_id).status == "refused" and calls == []
+    result = km.reset(grant.lease_id)
+    assert result.status == "refused" and calls == []
+    assert "no units or chips" in result.message
+    assert events(gk, "refused")[0]["reason"] == "lease record has no units or chips"
 
 
 def test_a_malformed_chip_id_is_refused_and_runs_nothing(tmp_path, sysfs):
@@ -404,7 +407,9 @@ def test_force_does_not_override_the_other_tenant_check(tmp_path, sysfs):
     unit = grant.units[0]
     gk.release_unit(unit)
     gk.claim_unit(unit, {"lease_id": "newtenant", "who": "claude:b"})
-    assert km.reset(grant.lease_id, force=True).status == "refused" and calls == []
+    result = km.reset(grant.lease_id, force=True)
+    assert result.status == "refused" and calls == []
+    assert "now belongs to lease newtenant" in result.message
 
 
 def test_both_gate_checks_run_under_the_mutex(tmp_path, sysfs):
@@ -473,14 +478,19 @@ def test_a_record_that_misses_one_of_its_chips_is_refused(tmp_path, sysfs):
     km, gk, calls = make(tmp_path, sysfs)
     grant = km.acquire("1", who="orchard:test", pid=OWNER)
     _damage(gk, grant.lease_id, chips=list(grant.bdfs)[:1])
-    assert km.reset(grant.lease_id).status == "refused" and calls == []
+    result = km.reset(grant.lease_id)
+    assert result.status == "refused" and calls == []
+    assert "disagrees with its units" in result.message
+    assert events(gk, "refused")[0]["reason"] == RECORD_DISAGREES
 
 
 def test_a_unit_the_topology_does_not_know_is_refused(tmp_path, sysfs):
     km, gk, calls = make(tmp_path, sysfs)
     grant = km.acquire("1", who="orchard:test", pid=OWNER)
     _damage(gk, grant.lease_id, units=["ghost-board"])
-    assert km.reset(grant.lease_id).status == "refused" and calls == []
+    result = km.reset(grant.lease_id)
+    assert result.status == "refused" and calls == []
+    assert "disagrees with its units" in result.message
     (rec,) = events(gk, "refused")
     assert rec["reason"] == RECORD_DISAGREES
 
@@ -489,7 +499,10 @@ def test_force_does_not_skip_the_record_check(tmp_path, sysfs):
     km, gk, calls = make(tmp_path, sysfs)
     a, b = two_leases(km)
     _damage(gk, a.lease_id, chips=list(a.bdfs) + list(b.bdfs))
-    assert km.reset(a.lease_id, force=True).status == "refused" and calls == []
+    result = km.reset(a.lease_id, force=True)
+    assert result.status == "refused" and calls == []
+    assert "disagrees with its units" in result.message
+    assert events(gk, "refused")[0]["reason"] == RECORD_DISAGREES
 
 
 
@@ -499,6 +512,8 @@ def test_force_does_not_override_the_unheld_check(tmp_path, sysfs):
     gk.release_unit(grant.units[0])
     result = km.reset(grant.lease_id, force=True)
     assert result.status == "refused" and calls == []
+    assert "no longer locked" in result.message
+    assert events(gk, "refused")[0]["reason"] == "unit no longer locked by this lease"
 
 
 def test_a_bad_record_is_refused_for_the_record_even_with_a_device_open(tmp_path, sysfs):
@@ -519,3 +534,51 @@ def test_a_lease_over_two_units_resets_all_of_its_chips(tmp_path, sysfs):
     result = km.reset(grant.lease_id)
     assert result.status == "reset"
     assert set(calls[0][2].split(",")) == set(grant.bdfs) and len(grant.bdfs) == 4
+
+
+def test_a_record_with_a_duplicated_chip_is_refused(tmp_path, sysfs):
+    # A set comparison alone lets [a, b, a] through and tt-smi would be asked
+    # to reset "a,b,a".
+    km, gk, calls = make(tmp_path, sysfs)
+    grant = km.acquire("1", who="orchard:test", pid=OWNER)
+    dup = list(grant.bdfs) + [grant.bdfs[0]]
+    _damage(gk, grant.lease_id, chips=dup)
+    result = km.reset(grant.lease_id)
+    assert (result.ok, result.status) == (False, "refused")
+    assert calls == []
+    assert "duplicate" in result.message and grant.bdfs[0] in result.message
+    (rec,) = events(gk, "refused")
+    assert rec["action"] == "reset" and rec["reason"] == RECORD_DISAGREES
+    assert rec["mismatched"] == ["chips"]
+
+
+def test_a_record_with_a_duplicated_device_index_is_refused(tmp_path, sysfs):
+    km, gk, calls = make(tmp_path, sysfs)
+    grant = km.acquire("1", who="orchard:test", pid=OWNER)
+    dup = list(grant.dev_indices) + [grant.dev_indices[0]]
+    _damage(gk, grant.lease_id, dev_indices=dup)
+    result = km.reset(grant.lease_id)
+    assert (result.ok, result.status) == (False, "refused")
+    assert calls == []
+    assert "duplicate" in result.message and "dev_indices" in result.message
+    (rec,) = events(gk, "refused")
+    assert rec["action"] == "reset" and rec["reason"] == RECORD_DISAGREES
+    assert rec["mismatched"] == ["dev_indices"]
+
+
+def test_a_chip_id_that_is_not_a_pci_address_is_refused_not_raised(tmp_path, sysfs, monkeypatch):
+    # The record agrees with the topology here, so the record check passes.
+    # The only way to reach a non-BDF is topology itself returning one (a
+    # dangling sysfs device link does that), so make no id a valid BDF.
+    import re
+    from gozer import reset as reset_mod
+    km, gk, calls = make(tmp_path, sysfs)
+    grant = km.acquire("1", who="orchard:test", pid=OWNER)
+    monkeypatch.setattr(reset_mod, "BDF_RE", re.compile(r"^never-matches$"))
+    result = km.reset(grant.lease_id)
+    assert (result.ok, result.status) == (False, "refused")
+    assert calls == []
+    assert grant.bdfs[0] in result.message and "nothing was reset" in result.message
+    (rec,) = events(gk, "refused")
+    assert rec["action"] == "reset" and "chip id" in rec["reason"]
+    assert events(gk, "reset") == []

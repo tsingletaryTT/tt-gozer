@@ -439,8 +439,15 @@ class Keymaster:
         expected = [c for u in units for c in self.gk.chips_in_unit(u)]
         want = {"chips": {c.bdf for c in expected},
                 "dev_indices": {c.dev_index for c in expected}}
-        have = {"chips": set(chips), "dev_indices": set(lease.get("dev_indices", []))}
-        bad = [name for name in want if want[name] != have[name]]
+        have_lists = {"chips": list(chips),
+                      "dev_indices": list(lease.get("dev_indices", []))}
+        have = {name: set(v) for name, v in have_lists.items()}
+        # Sets hide repeats, and tt-smi would be handed "a,b,a". A repeated
+        # entry is a record that disagrees with its units, so name it.
+        dupes = {name: sorted({x for x in v if v.count(x) > 1}, key=str)
+                 for name, v in have_lists.items()}
+        bad = [name for name in want
+               if want[name] != have[name] or dupes[name]]
         if bad:
             history.log(self.gk.history_root, "refused", action="reset",
                        lease_id=lease_id, who=lease.get("who"),
@@ -448,8 +455,11 @@ class Keymaster:
                        mismatched=bad)
             return ResetResult(False, "refused", (
                 f"lease {lease_id} disagrees with its units: " +
-                "; ".join(f"{name} are {sorted(have[name])} but the units "
-                          f"have {sorted(want[name])}" for name in bad) +
+                "; ".join(
+                    f"{name} are {sorted(have[name])} but the units "
+                    f"have {sorted(want[name])}"
+                    + (f" (duplicate entries: {dupes[name]})" if dupes[name] else "")
+                    for name in bad) +
                 "; nothing was reset"))
 
         fd_map = procfd.holders(self.gk.proc_root)
@@ -485,7 +495,20 @@ class Keymaster:
                 f"refusing to reset: {', '.join(sorted(unheld))} no longer locked "
                 f"by lease {lease_id} (already reaped?); nothing was reset"))
 
-        reset_ok, out = reset_mod.reset_chips(chips, runner=self.reset_runner)
+        try:
+            reset_ok, out = reset_mod.reset_chips(chips, runner=self.reset_runner)
+        except reset_mod.ResetError as e:
+            # A chip id that is not a PCI address can only come from topology
+            # itself (a dangling sysfs device link gives the basename "device").
+            # reset_command refuses before running anything, so report that as
+            # a refusal rather than letting the exception reach the CLI.
+            bad_ids = [c for c in chips if not reset_mod.BDF_RE.match(c)]
+            history.log(self.gk.history_root, "refused", action="reset",
+                       lease_id=lease_id, who=lease.get("who"),
+                       reason="malformed chip id", chips=bad_ids)
+            return ResetResult(False, "refused", (
+                f"refusing to reset: chip id {bad_ids or chips} is not a PCI "
+                f"address ({e}); nothing was reset"))
         message = out or ("reset ok" if reset_ok else "reset failed")
 
         with self.gk.critical_section():
