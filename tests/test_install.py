@@ -228,7 +228,7 @@ def test_gozer_park_skill_shows_only_verbs_and_flags_gozer_has():
 TT_MODEL_VERBS = {
     "package", "package-thin", "publish", "unpublish", "push", "pull",
     "info", "list", "search", "profiles", "login", "serve", "curl",
-    "stop", "logs",
+    "stop", "logs", "rm", "version",
 }
 
 
@@ -242,3 +242,21 @@ def test_gozer_park_skill_names_only_tt_model_verbs_that_exist():
     for span in spans:
         verb = span.split()[1]
         assert verb in TT_MODEL_VERBS, f"skill names unknown tt-model verb: {span}"
+
+
+# Verbs of docker and tools the skill may name in backticks. Keep it small.
+DOCKER_VERBS = {"ps", "inspect", "logs", "stop", "images", "info"}
+KNOWN_TOOLS = {"ss", "ps", "curl", "docker", "gozer", "tt-model", "grep", "xargs"}
+
+
+def test_gozer_park_skill_names_only_real_docker_verbs_and_known_tools():
+    import re
+    text = open(PARK_SKILL).read()
+    spans = re.findall(r"`(docker\s[^`]*)`", text)
+    assert spans, "skill no longer names any docker command"
+    for span in spans:
+        verb = span.split()[1]
+        assert verb in DOCKER_VERBS, f"skill names unknown docker verb: {span}"
+    # A backticked ss or ps command must start with a known tool.
+    for span in re.findall(r"`((?:ss|ps)\s[^`]*)`", text):
+        assert span.split()[0] in KNOWN_TOOLS, span
