@@ -137,7 +137,7 @@ same computed stats without rendering HTML, for scripting.
 
 ## For agents
 
-Point your agent at the two skills and one rule; that's the whole integration.
+Point your agent at the skills and one rule; that's the whole integration.
 
 **The rule**, in a `CLAUDE.md` or equivalent:
 
@@ -150,6 +150,7 @@ Point your agent at the two skills and one rule; that's the whole integration.
 
 - `gozer-keymaster` — how to ask for chips, read the grant, behave while queued, release
 - `gozer-gatekeeper` — what to do when the gate looks stuck, contended, or lying
+- `gozer-park` — how to hold a board through a model swap with `--owner-pid` and `gozer reset`
 
 **For non-Claude flows**, `--json` makes every command machine-readable and the exit codes
 carry the outcome, so no output parsing is required:

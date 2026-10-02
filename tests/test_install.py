@@ -25,6 +25,7 @@ def test_installer_links_cli_and_skills(tmp_path):
     assert os.path.islink(home / ".local" / "bin" / "gozer")
     assert os.path.islink(home / ".claude" / "skills" / "gozer-keymaster")
     assert os.path.islink(home / ".claude" / "skills" / "gozer-gatekeeper")
+    assert os.path.islink(home / ".claude" / "skills" / "gozer-park")
     assert (home / ".claude" / "skills" / "unrelated").is_dir()
 
 
@@ -152,3 +153,52 @@ def test_install_sh_prints_the_optional_reconcile_instructions(tmp_path):
     assert r.returncode == 0, r.stderr
     assert "gozer-reconcile.timer" in r.stdout
     assert "systemctl --user enable" in r.stdout
+
+
+PARK_SKILL = os.path.join(REPO, "skills", "gozer-park", "SKILL.md")
+
+
+def test_gozer_park_skill_exists_and_names_the_commands_it_teaches():
+    text = open(PARK_SKILL).read()
+    assert text.startswith("---\nname: gozer-park\n")
+    for needle in ("--owner-pid", "gozer reset", "gozer env", "HELD-FOREIGN",
+                   "gozer release"):
+        assert needle in text, needle
+
+
+def _subparsers():
+    """Map each gozer verb (and alias) to its argparse parser, built from the
+    real CLI so the skill is checked against what gozer actually has."""
+    import argparse
+    from gozer.cli import build_parser
+    for action in build_parser()._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            return dict(action.choices)
+    raise AssertionError("gozer has no subcommands")
+
+
+def _park_bash_lines():
+    """Logical command lines from the skill's fenced bash blocks, with
+    backslash continuations joined."""
+    import re
+    text = open(PARK_SKILL).read()
+    lines = []
+    for block in re.findall(r"```bash\n(.*?)```", text, re.S):
+        lines.extend(block.replace("\\\n", " ").splitlines())
+    return lines
+
+
+def test_gozer_park_skill_shows_only_verbs_and_flags_gozer_has():
+    import re
+    verbs = _subparsers()
+    seen = set()
+    for line in _park_bash_lines():
+        for m in re.finditer(r"gozer\s+([a-z][\w-]*)([^|;&)]*)", line):
+            verb, rest = m.group(1), m.group(2)
+            assert verb in verbs, f"skill shows unknown verb: {line}"
+            seen.add(verb)
+            flags = {opt for a in verbs[verb]._actions for opt in a.option_strings}
+            for flag in re.findall(r"(?<![\w-])(--[a-z][\w-]*)", rest):
+                assert flag in flags, f"gozer {verb} has no {flag}: {line}"
+    # The block must really exercise the commands the skill teaches.
+    assert {"acquire", "env", "reset", "release"} <= seen, seen

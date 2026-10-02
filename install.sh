@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install gozer: the CLI onto PATH, the two skills into ~/.claude/skills.
+# Install gozer: the CLI onto PATH, the three skills into ~/.claude/skills.
 #
 # Idempotent — safe to re-run. Links rather than copies, so a git pull updates
 # everything in place.
@@ -40,7 +40,7 @@ echo "  $BIN_DIR/gozer -> $REPO/bin/gozer"
 
 # Skills. Link each directory INDIVIDUALLY: ~/.claude/skills already holds
 # ~30 unrelated skills, so linking the parent would clobber them.
-for skill in gozer-keymaster gozer-gatekeeper; do
+for skill in gozer-keymaster gozer-gatekeeper gozer-park; do
     refuse_if_real_dir "$SKILL_DIR/$skill"
     ln -sfn "$REPO/skills/$skill" "$SKILL_DIR/$skill"
     echo "  $SKILL_DIR/$skill -> $REPO/skills/$skill"
