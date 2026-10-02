@@ -62,16 +62,26 @@ command itself without forking, so the command stays your child. `$!` is then bo
 its process group id. Record it. (An interactive shell with job control makes `setsid` fork,
 which re-parents the server. Start it from a script instead.)
 
-Treat `HELD-FOREIGN` on your own board as a real alarm: something outside your process tree has
-the device open. A process that exits while gozer reads its parent chain can show
+Treat `HELD-FOREIGN` on your own board as a real alarm when the holder should be your own work,
+such as a bundle server or a test you started yourself: something outside your process tree has
+the device open. It is expected while a `tt-model serve` container runs (see the next section).
+A process that exits while gozer reads its parent chain can show
 `HELD-FOREIGN` for a moment. Run `gozer status` once more before acting on it.
 
 ## Before every reset: confirm the workload has stopped
 
-gozer reads `/proc/<pid>/fd` as your user. It cannot see device handles held by a root-owned
-process such as a container. For a container server, `gozer status` shows `CLAIMED` the whole
-time, and `gozer reset` does not refuse, even while the device is still open. A stop command
-may return before the device is released.
+gozer reads `/proc/<pid>/fd` as your user. It cannot see device handles held by a process
+that belongs to another user, such as a root-owned one. Whether it sees a container depends on
+who the container's processes run as. A container whose processes it cannot read shows
+`CLAIMED`, and `gozer reset` does not refuse while the device is still open.
+
+On this box a container started with `tt-model serve` has its server process (`python -m
+uvicorn ...`) running as the same user, under a root `containerd-shim-runc-v2`. gozer reads that
+process, which is not your descendant, so `gozer status` shows the chip as `HELD-FOREIGN` and
+`gozer reset` refuses. That is the expected picture for such a container, because the container
+is never your child. It is no sign that the lease is wrong. After `tt-model stop`, the chip
+showed `CLAIMED`. Confirm the stop with docker as described below, and do not rely on gozer's
+view in either direction. A stop command may return before the device is released.
 
 Do not run `gozer reset` until the server's own tooling shows that the workload has stopped:
 
@@ -79,7 +89,7 @@ Do not run `gozer reset` until the server's own tooling shows that the workload 
   `docker ps --format '{{.ID}} {{.Image}} {{.Names}} {{.Ports}}'`. tt-model names the
   container `tt-model-<name>-<profile>`. A line belongs to the package if its name matches,
   if the image column contains the `<id>` that `tt-model list` prints as `image <id>` for the
-  package (the column shows `tt-model/<name>:<id>`), or if its published port matches the
+  package (the column can show `tt-model/<name>:<id>` or a bare id), or if its published port matches the
   port you passed to `tt-model serve --port`.
   As a second check, this prints each running container with the device paths mapped into it
   (the command is one long line):
@@ -109,6 +119,13 @@ Do not run `gozer reset` until the server's own tooling shows that the workload 
     must fail to connect.
 - For a test you started yourself, the test runner has exited and you have its exit status.
 
+These checks were run on 2026-10-02 against a live `tt-model serve` container
+(`episod/audio8-asr-infinite-p150`) and against the same container after `tt-model stop`. On
+the live container, `docker ps` showed the container, with the image column as the bare id
+`f0ed6056d85f` and port 20000 published. The `docker inspect` line showed `privileged=false`
+and the single device `/dev/tenstorrent/0`. After the stop, `docker ps` was empty, `ss`
+printed only its header line, and `curl` exited with status 7.
+
 `tt-model stop` sends SIGTERM first. If the grace period expires and docker has to SIGKILL,
 `tt-model stop` resets the mesh itself with tt-smi from a throwaway container, and it tells you
 that it did. The board lease is still yours either way, and the `gozer reset` below is still
@@ -119,6 +136,25 @@ your tree still has the device open. `HELD-FOREIGN` means a process outside it d
 
 `gozer reset` refuses (exit 15) while a device is open by one of your own processes. That check
 covers only your own processes.
+
+## Resets touch the whole box
+
+`tt-smi -r` opens every device on the box while it resets. During a `gozer reset` or
+`gozer release`, which took about 42 seconds here, the other board shows `BUSY-UNTRACKED` in
+`gozer status`, with the reset's pid as holder. A neighbour's preflight or `gozer acquire` sees
+that board as busy for that time. Do not preflight or acquire a board while another board's
+reset is running. Retry after it ends. Two supervisors should not overlap their resets.
+
+## Measured timings
+
+Measured on 2026-10-02 on this box, one p300c board, package `episod/audio8-asr-infinite-p150`:
+
+| Step | Time |
+|---|---|
+| `gozer reset` (about nine runs) | 41.6 to 41.7 s |
+| `gozer release`, including its reset | 41.6 to 41.7 s |
+| `tt-model stop`, clean shutdown, no mesh reset | 1.6 to 1.9 s |
+| container warm boot to ready | 19.6 to 20.3 s |
 
 ## The swap
 

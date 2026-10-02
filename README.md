@@ -118,8 +118,8 @@ $ gozer history -n 5
 | `queue` [`--json`] | list waiting requests |
 | `cancel <ticket>` | drop a queue ticket |
 | `renew <lease> --expect D` | extend a lease's advisory deadline |
-| `release` / `banish <lease>` [`--no-reset`] [`--force`] | give chips back (resets them) |
-| `reset <lease>` [`--force`] | reset the lease's chips in place and keep the lease; refuses while a device is open by one of your own processes (other users' processes are not visible, see "fd truth is same-user" below) |
+| `release` / `banish <lease>` [`--no-reset`] [`--force`] | give chips back (resets them); the reset opens every device on the box for about 42 s, so another board shows `BUSY-UNTRACKED` meanwhile. Do not preflight or acquire a board while another board's reset runs |
+| `reset <lease>` [`--force`] | reset the lease's chips in place and keep the lease; refuses while a device is open by one of your own processes (other users' processes are not visible, see "fd truth is same-user" below); the same cross-board window applies, so supervisors should not overlap resets |
 | `reconcile` [`--sudo`] | re-derive state from kernel truth, reaping what is genuinely dead |
 | `adopt <target> --who W` | wrap a lease around untracked running work |
 | `env <lease>` | print export lines for a lease |
