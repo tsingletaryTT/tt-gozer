@@ -23,16 +23,22 @@ prints it too, on the line `lease <id>   release with: gozer release <id>`. `goz
 does not show it, so record it when you take the lease.
 
 If the board is busy, `acquire` exits 10 and prints a ticket. Do other work, then run the
-same `acquire` again with `--ticket <ticket>` added, and repeat until it grants. Do not use
-`gozer wait` for this. `wait` grants the lease itself, and it does so without an owner pid, so
-the lease would fall back to the 15 minute grace window.
+same `acquire` again with `--ticket <ticket>` added. Sleep a few seconds between calls and do
+not spin. Every call exits 10 again until your ticket is at the head and the chips are free.
+
+- When chips free up, the head ticket gets a 90 second claim window. A retry loop that sleeps
+  longer than that can lose its place, because the ticket then moves to the back.
+- A ticket lives at most one hour. After that `acquire --ticket` exits 13. Take a new ticket by
+  running `acquire` without `--ticket`.
+- Do not use `gozer wait` for this. `wait` grants the lease itself, and it does so without an
+  owner pid, so the lease would fall back to the 15 minute grace window.
 
 Pass the pid of the supervisor itself, the process that stays alive for the whole run and
 starts the servers and tests. A Python supervisor passes `os.getpid()`. A shell script passes
 `$$`, which is the script's own pid. In an interactive or tool-spawned shell, `$$` is that
-shell's pid, which exits early and is the wrong owner. Do not pass pid 1. The owner pid decides which processes count as yours (see
-below), and every process on the machine descends from pid 1, so gozer only counts descendants
-for owner pids above 1.
+shell's pid, which exits early and is the wrong owner. Do not pass pid 1. The owner pid
+decides which processes count as yours (see below). Every process on the machine descends
+from pid 1, so gozer only counts descendants for owner pids above 1.
 
 gozer judges a lease with an owner pid by that pid's liveness. It stays `CLAIMED` while the owner
 lives and nothing has the device open. The 15 minute grace window of a bare `acquire` does not
@@ -54,30 +60,39 @@ Treat `HELD-FOREIGN` on your own board as a real alarm: something outside your p
 the device open. A process that exits while gozer reads its parent chain can show
 `HELD-FOREIGN` for a moment. Run `gozer status` once more before acting on it.
 
+## Before every reset: confirm the workload has stopped
+
+gozer reads `/proc/<pid>/fd` as your user. It cannot see device handles held by a root-owned
+process such as a container. For a container server, `gozer status` shows `CLAIMED` the whole
+time, and `gozer reset` does not refuse, even while the device is still open. A stop command
+may return before the device is released.
+
+Do not run `gozer reset` until the server's own tooling shows that the workload has stopped:
+
+- For tt-model, `tt-model ps` no longer lists it.
+- For plain docker, `docker ps` no longer lists the container.
+- For a test you started yourself, the test runner has exited and you have its exit status.
+
+Then run `gozer status` and wait until your chips show `CLAIMED`. `HELD` means a process in
+your tree still has the device open. `HELD-FOREIGN` means a process outside it does.
+
+`gozer reset` refuses (exit 15) while a device is open by one of your own processes. That check
+is a backstop for your own processes only.
+
 ## The swap
 
 1. Stop the first server cleanly. For tt-model that is `tt-model stop`.
-2. Confirm that the server is gone, using the server's own tooling. For tt-model, `tt-model ps`
-   no longer lists it. For plain docker, `docker ps` no longer lists the container. Then run
-   `gozer status` and wait until your chips show `CLAIMED`. `HELD` means the server still
-   has the device open. `HELD-FOREIGN` means something outside your process tree has it.
-   gozer reads `/proc/<pid>/fd` as your user, so it cannot see device handles held by a
-   root-owned process such as a container. For a container server, `gozer status` shows
-   `CLAIMED` the whole time, and `tt-model stop` can return before the device is released.
-   Only the server's own tooling shows that it has stopped.
+2. Confirm that it stopped, as described in the section above.
 3. Reset the chips and keep the lease:
 
    ```bash
    gozer reset <lease-id>
    ```
 
-   It refuses (exit 15) while a device is open by one of your own processes. That check is a
-   backstop for your own processes only. gozer cannot see other users' or root-owned
-   processes, so a device they have open does not make it refuse. Do not pass `--force`
-   unless a person tells you to.
+   Do not pass `--force` unless a person tells you to.
 4. Run the other work with the same exports.
-5. When it ends, run `gozer reset <lease-id>` again. A failed or hung run can leave the chips
-   dirty.
+5. When it ends, confirm that it stopped, as described above. Then run
+   `gozer reset <lease-id>` again. A failed or hung run can leave the chips dirty.
 6. Start the first server again with the same exports.
 
 If the board's eth mesh is shared with another tenant, a reset can perturb that tenant, as a
