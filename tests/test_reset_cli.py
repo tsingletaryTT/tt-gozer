@@ -120,7 +120,7 @@ def test_json_carries_exactly_reset_status_message(env, capsys):
     _, out = run(["reset", lease, "--json"], capsys)
     payload = json.loads(out)
     assert set(payload) == {"reset", "status", "message"}
-    assert payload["message"] == "reset ok" or payload["message"] == ""
+    assert payload["message"] == "reset ok"
 
 
 def test_a_failed_reset_json_says_reset_false(env, capsys, monkeypatch):
@@ -133,7 +133,7 @@ def test_a_failed_reset_json_says_reset_false(env, capsys, monkeypatch):
 def test_human_output_prints_the_message(env, capsys):
     lease = take_lease(capsys)
     code, out = run(["reset", lease], capsys)
-    assert code == 0 and out.strip() != "" and not out.lstrip().startswith("{")
+    assert code == 0 and out.strip() == "reset ok"
 
 
 def test_a_lease_taken_during_the_reset_exits_18(env, capsys):

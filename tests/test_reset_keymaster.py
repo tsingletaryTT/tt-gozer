@@ -404,3 +404,20 @@ def test_force_does_not_override_the_other_tenant_check(tmp_path, sysfs):
     gk.release_unit(unit)
     gk.claim_unit(unit, {"lease_id": "newtenant", "who": "claude:b"})
     assert km.reset(grant.lease_id, force=True).status == "refused" and calls == []
+
+
+def test_both_gate_checks_run_under_the_mutex(tmp_path, sysfs):
+    # One check before the reset and one after, each inside the critical
+    # section. A check made outside it could race a claim.
+    km, gk, _ = make(tmp_path, sysfs)
+    grant = km.acquire("1", who="orchard:test", pid=OWNER)
+    entered = []
+    real = gk.critical_section
+
+    def counting(*a, **kw):
+        entered.append(1)
+        return real(*a, **kw)
+
+    gk.critical_section = counting
+    km.reset(grant.lease_id)
+    assert len(entered) == 2
