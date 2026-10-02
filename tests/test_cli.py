@@ -361,6 +361,8 @@ def test_run_returns_130_when_interrupted_with_no_child(env, capsys, monkeypatch
 def test_unreadable_topology_exits_14(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("GOZER_ROOT", str(tmp_path / "state"))
     monkeypatch.setenv("GOZER_SYSFS_ROOT", str(tmp_path / "nothing"))
+    # A fake proc root, so the status scan never reads this machine's /proc.
+    monkeypatch.setenv("GOZER_PROC_ROOT", str(tmp_path / "proc"))
     code, _ = run(["status"], capsys)
     assert code == 14
 

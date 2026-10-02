@@ -72,3 +72,46 @@ def sysfs(tmp_path):
     def _build(chips):
         return build_sysfs(str(tmp_path / "sys"), chips)
     return _build
+
+
+def fake_proc_tree(tmp_path, procs):
+    """Build a fake /proc. procs: {pid: {"ppid": int, "devs": [device_index, ...]}}.
+
+    Writes what gozer reads: fd/ symlinks to /dev/tenstorrent/<N> (the device
+    scan), comm (the process name) and status (the parent pid, for the
+    ownership walk). A pid with no entry does not exist, which is how a test
+    models a process that has exited.
+    """
+    root = tmp_path / "proc"
+    root.mkdir(parents=True, exist_ok=True)
+    for pid, spec in procs.items():
+        d = root / str(pid)
+        (d / "fd").mkdir(parents=True, exist_ok=True)
+        (d / "comm").write_text("python\n")
+        (d / "status").write_text(f"Name:\tpython\nPPid:\t{spec.get('ppid', 1)}\n")
+        for i, dev in enumerate(spec.get("devs", [])):
+            os.symlink(f"/dev/tenstorrent/{dev}", d / "fd" / str(i + 3))
+    return str(root)
+
+
+@pytest.fixture(autouse=True)
+def no_real_proc(monkeypatch):
+    """Fail a test that scans the real /proc.
+
+    A Gatekeeper built without a proc_root scans the real /proc for open
+    Tenstorrent devices. On a shared box other agents hold devices open, so
+    the chips look busy and the test's own acquire queues instead of
+    granting. The test then passes or fails depending on what else is running.
+    Raising here turns that silent dependence into an immediate, named error.
+    """
+    from gozer import procfd
+    real = procfd.holders
+
+    def guarded(proc_root="/proc", *args, **kwargs):
+        if proc_root == "/proc":
+            raise AssertionError(
+                "this test scans the real /proc; give the Gatekeeper a fake "
+                "proc_root (see fake_proc_tree in conftest.py)")
+        return real(proc_root, *args, **kwargs)
+
+    monkeypatch.setattr(procfd, "holders", guarded)

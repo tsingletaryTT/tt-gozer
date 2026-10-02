@@ -11,7 +11,8 @@ from gozer.gatekeeper import Gatekeeper
 
 def test_history_root_defaults_to_root(tmp_path, sysfs):
     from conftest import QUIETBOX
-    gk = Gatekeeper(root=str(tmp_path / "state"), sysfs_root=sysfs(QUIETBOX))
+    gk = Gatekeeper(root=str(tmp_path / "state"), sysfs_root=sysfs(QUIETBOX),
+                    proc_root=str(tmp_path / "proc"))
     assert gk.history_root == gk.root
 
 
@@ -19,7 +20,8 @@ def test_history_root_param_overrides_default(tmp_path, sysfs):
     from conftest import QUIETBOX
     history_dir = tmp_path / "persistent"
     gk = Gatekeeper(root=str(tmp_path / "state"), sysfs_root=sysfs(QUIETBOX),
-                     history_root=str(history_dir))
+                    proc_root=str(tmp_path / "proc"),
+                    history_root=str(history_dir))
     assert gk.history_root == str(history_dir)
     assert gk.history_root != gk.root
 
@@ -28,7 +30,8 @@ def test_history_root_env_var_overrides_default(tmp_path, sysfs, monkeypatch):
     from conftest import QUIETBOX
     history_dir = tmp_path / "persistent"
     monkeypatch.setenv("GOZER_HISTORY_ROOT", str(history_dir))
-    gk = Gatekeeper(root=str(tmp_path / "state"), sysfs_root=sysfs(QUIETBOX))
+    gk = Gatekeeper(root=str(tmp_path / "state"), sysfs_root=sysfs(QUIETBOX),
+                    proc_root=str(tmp_path / "proc"))
     assert gk.history_root == str(history_dir)
 
 
@@ -37,7 +40,8 @@ def test_history_root_param_wins_over_env_var(tmp_path, sysfs, monkeypatch):
     monkeypatch.setenv("GOZER_HISTORY_ROOT", str(tmp_path / "from-env"))
     explicit = tmp_path / "explicit"
     gk = Gatekeeper(root=str(tmp_path / "state"), sysfs_root=sysfs(QUIETBOX),
-                     history_root=str(explicit))
+                    proc_root=str(tmp_path / "proc"),
+                    history_root=str(explicit))
     assert gk.history_root == str(explicit)
 
 
@@ -45,7 +49,8 @@ def test_history_root_directory_is_created(tmp_path, sysfs):
     from conftest import QUIETBOX
     history_dir = tmp_path / "persistent" / "nested"
     Gatekeeper(root=str(tmp_path / "state"), sysfs_root=sysfs(QUIETBOX),
-               history_root=str(history_dir))
+                    proc_root=str(tmp_path / "proc"),
+                    history_root=str(history_dir))
     assert os.path.isdir(history_dir)
 
 
@@ -56,7 +61,8 @@ def test_granted_event_lands_in_history_root_not_gozer_root(tmp_path, sysfs):
 
     history_dir = tmp_path / "persistent"
     gk = Gatekeeper(root=str(tmp_path / "state"), sysfs_root=sysfs(QUIETBOX),
-                     history_root=str(history_dir))
+                    proc_root=str(tmp_path / "proc"),
+                    history_root=str(history_dir))
     km = Keymaster(gk)
     km.acquire("1", who="claude:test", reason="test")
 
@@ -75,7 +81,8 @@ def test_history_survives_gozer_root_being_wiped(tmp_path, sysfs):
     history_dir = tmp_path / "persistent"
     state_dir = tmp_path / "state"
     gk = Gatekeeper(root=str(state_dir), sysfs_root=sysfs(QUIETBOX),
-                     history_root=str(history_dir))
+                    proc_root=str(tmp_path / "proc"),
+                    history_root=str(history_dir))
     km = Keymaster(gk)
     km.acquire("1", who="claude:test", reason="test")
 
