@@ -137,7 +137,7 @@ def test_control_a_lease_without_an_owner_pid_is_reaped_in_the_same_gap(env, cap
 
 def test_a_fresh_bare_lease_survives_the_gap_inside_the_grace_window(env, capsys):
     """Pins the other side of the control: the bare lease is only lost after
-    the window, so the control above fails because of `since`, not by accident."""
+    the window, so the control above fails because the window has passed."""
     code, grant = acquire(capsys)
     assert code == 0
     assert states(capsys, "reconcile")[0] == "CLAIMED"
