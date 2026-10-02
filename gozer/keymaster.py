@@ -303,14 +303,49 @@ class Keymaster:
         the box for the tens of seconds tt-smi takes. The residual window
         (between the second check and the actual unlink) is microseconds of
         local file I/O, and release_unit's own lease_id guard covers it.
+
+        The chips to reset and the device indices to scan are derived from the
+        lease's units through the current topology. The record's own `chips`
+        and `dev_indices` lists are never used for either. The gate checks
+        look at `units` only, so a record whose lists reach past its units
+        would otherwise reset another tenant's chips with every check
+        passing, and a record missing a list would crash before the lease was
+        cleaned up. `reset` closes the same hole by refusing; release instead
+        proceeds with the derived chips, notes the disagreement and logs it,
+        because it must stay able to clean up a damaged record. A unit the
+        topology does not know gives no chips, so the reset is skipped and
+        the unit is not marked clean. A malformed chip id (`ResetError`) is
+        treated as a failed reset.
         """
         lease = self.gk.read_lease(lease_id)
         if lease is None:
             return False, f"lease {lease_id} not found"
         units = lease.get("units", [])
+        derived = [c for u in units for c in self.gk.chips_in_unit(u)]
+        derived_bdfs = [c.bdf for c in derived]
+        derived_devs = [c.dev_index for c in derived]
+        messages = []
+        recorded_chips = lease.get("chips")
+        recorded_devs = lease.get("dev_indices")
+        # A missing list is only reported when it matters: the chips list is
+        # compared as a set, the device list likewise.
+        record_mismatch = (
+            (recorded_chips is not None
+             and sorted(map(str, recorded_chips)) != sorted(derived_bdfs))
+            or (recorded_devs is not None
+                and sorted(map(str, recorded_devs)) != sorted(map(str, derived_devs))))
+        if record_mismatch:
+            messages.append(
+                f"lease record lists chips {list(recorded_chips or [])} but its "
+                f"units have {derived_bdfs}; using the units")
+            history.log(self.gk.history_root, "release_record_mismatch",
+                       lease_id=lease_id, who=lease.get("who"),
+                       recorded_chips=recorded_chips, derived_chips=derived_bdfs,
+                       recorded_dev_indices=recorded_devs,
+                       derived_dev_indices=derived_devs)
 
         fd_map = procfd.holders(self.gk.proc_root)
-        still_open = [d for d in lease.get("dev_indices", []) if fd_map.get(d)]
+        still_open = [d for d in derived_devs if fd_map.get(d)]
         if still_open and not force:
             history.log(self.gk.history_root, "refused", action="release",
                        lease_id=lease_id, who=lease.get("who"),
@@ -338,10 +373,13 @@ class Keymaster:
                 f" -- lease {lease_id} was already reaped or released; "
                 "nothing was reset")
 
-        messages = []
         reset_ran = False
         reset_ok = False
-        if unheld and not no_reset:
+        if not derived_bdfs and not no_reset:
+            messages.append(
+                f"not resetting: lease {lease_id} has no chips "
+                "(its units are empty or unknown to the topology)")
+        elif unheld and not no_reset:
             # Our lock is gone but nobody else has taken these units yet.
             # Resetting now would fire at chips that are free for anyone to
             # grab, so skip it and just clean up our own bookkeeping.
@@ -350,8 +388,13 @@ class Keymaster:
                 f"by lease {lease_id} (already reaped?)")
         elif not no_reset:
             reset_ran = True
-            reset_ok, out = reset_mod.reset_chips(lease["chips"],
-                                                  runner=self.reset_runner)
+            try:
+                reset_ok, out = reset_mod.reset_chips(derived_bdfs,
+                                                      runner=self.reset_runner)
+            except reset_mod.ResetError as e:
+                # A chip id that is not a PCI address. Count it as a failed
+                # reset so the lease is still torn down.
+                reset_ok, out = False, f"reset refused: {e}"
             messages.append(out or ("reset ok" if reset_ok else "reset failed"))
             if not reset_ok:
                 messages.append("reset failed -- unit released but NOT marked clean")
@@ -392,7 +435,7 @@ class Keymaster:
         since = lease.get("since")
         duration_s = _elapsed_seconds(since, utcnow()) if since else None
         history.log(self.gk.history_root, "released", lease_id=lease_id,
-                   who=lease.get("who"), chips=lease.get("chips", []),
+                   who=lease.get("who"), chips=derived_bdfs,
                    duration_s=duration_s, reset_ran=reset_ran,
                    reset_ok=reset_ok if reset_ran else None)
         return True, "; ".join(m for m in messages if m)

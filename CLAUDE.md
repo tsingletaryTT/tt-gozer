@@ -55,6 +55,13 @@ uncommitted bump to 0.3.3 and the owner bumps at merge. Open item: `gozer wait`
 grants a lease without an owner pid, so a supervisor re-runs `acquire --owner-pid
 ... --ticket`; supporting `--owner-pid` on `wait` is a small code change if wanted.
 
+**Release derives its chips (2026-10-02).** `Keymaster.release` took the chips to reset and the
+devices to scan from the lease record while checking the gate against its units only, so a
+corrupt record could reset another tenant's chips or crash before cleanup. It now derives both
+from the units through the topology (as `reset` does), notes and logs a disagreement
+(`release_record_mismatch`), skips the reset when the units give no chips, and treats a
+`ResetError` as a failed reset. `tests/test_release_derives_chips.py` covers it.
+
 ## Key decisions and why
 
 * **CLI + thin skills**, not logic inside skills. Race-sensitive code belongs in
