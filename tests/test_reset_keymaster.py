@@ -443,9 +443,11 @@ def test_a_record_whose_chips_reach_another_leases_chips_is_refused(tmp_path, sy
     assert (result.ok, result.status) == (False, "refused")
     assert "chips" in result.message and b.bdfs[0] in result.message
     assert calls == []
+    assert f"the units have {sorted(a.bdfs)}" in result.message
     assert gk.unit_lease(b.units[0])["lease_id"] == b.lease_id
     (rec,) = events(gk, "refused")
     assert rec["action"] == "reset" and rec["reason"] == RECORD_DISAGREES
+    assert rec["mismatched"] == ["chips"]
 
 
 def test_a_record_whose_dev_indices_reach_another_board_is_refused(tmp_path, sysfs):
@@ -455,6 +457,7 @@ def test_a_record_whose_dev_indices_reach_another_board_is_refused(tmp_path, sys
     result = km.reset(a.lease_id)
     assert (result.ok, result.status) == (False, "refused")
     assert "dev_indices" in result.message and calls == []
+    assert events(gk, "refused")[0]["mismatched"] == ["dev_indices"]
 
 
 def test_a_record_with_no_dev_indices_is_refused(tmp_path, sysfs):
@@ -488,3 +491,31 @@ def test_force_does_not_skip_the_record_check(tmp_path, sysfs):
     _damage(gk, a.lease_id, chips=list(a.bdfs) + list(b.bdfs))
     assert km.reset(a.lease_id, force=True).status == "refused" and calls == []
 
+
+
+def test_force_does_not_override_the_unheld_check(tmp_path, sysfs):
+    km, gk, calls = make(tmp_path, sysfs)
+    grant = km.acquire("1", who="orchard:test", pid=OWNER)
+    gk.release_unit(grant.units[0])
+    result = km.reset(grant.lease_id, force=True)
+    assert result.status == "refused" and calls == []
+
+
+def test_a_bad_record_is_refused_for_the_record_even_with_a_device_open(tmp_path, sysfs):
+    # The record check comes before the open-device scan, so the scan never
+    # reads indices that were not verified against the units.
+    km, gk, calls = make(tmp_path, sysfs)
+    a, b = two_leases(km)
+    _damage(gk, a.lease_id, chips=list(a.bdfs) + list(b.bdfs))
+    fake_proc_tree(tmp_path, {CHILD: {"ppid": OWNER, "devs": list(a.dev_indices)}})
+    result = km.reset(a.lease_id)
+    assert result.status == "refused" and "disagrees" in result.message and calls == []
+
+
+def test_a_lease_over_two_units_resets_all_of_its_chips(tmp_path, sysfs):
+    km, gk, calls = make(tmp_path, sysfs)
+    grant = km.acquire("4", who="orchard:test", pid=OWNER)
+    assert len(grant.units) == 2
+    result = km.reset(grant.lease_id)
+    assert result.status == "reset"
+    assert set(calls[0][2].split(",")) == set(grant.bdfs) and len(grant.bdfs) == 4
