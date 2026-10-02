@@ -221,3 +221,24 @@ def test_gozer_park_skill_shows_only_verbs_and_flags_gozer_has():
         assert span in used_flags, f"skill names unknown flag in prose: {span}"
     # The block must really exercise the commands the skill teaches.
     assert {"acquire", "env", "reset", "release"} <= seen, seen
+
+
+# Verbs of the real tt-model CLI. Taken from `tt-model --help` on 2026-10-02.
+# Refresh this list whenever tt-model changes.
+TT_MODEL_VERBS = {
+    "package", "package-thin", "publish", "unpublish", "push", "pull",
+    "info", "list", "search", "profiles", "login", "serve", "curl",
+    "stop", "logs",
+}
+
+
+def test_gozer_park_skill_names_only_tt_model_verbs_that_exist():
+    """The gozer check above does not cover tt-model. A backticked
+    `tt-model <verb>` span must use a verb from the list above."""
+    import re
+    text = open(PARK_SKILL).read()
+    spans = re.findall(r"`(tt-model\s[^`]*)`", text)
+    assert spans, "skill no longer names any tt-model command"
+    for span in spans:
+        verb = span.split()[1]
+        assert verb in TT_MODEL_VERBS, f"skill names unknown tt-model verb: {span}"
