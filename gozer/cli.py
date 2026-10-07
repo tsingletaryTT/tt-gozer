@@ -430,7 +430,7 @@ def cmd_history(args) -> int:
 
 def cmd_report(args) -> int:
     gk, _ = _make(args)
-    records = history.read(gk.history_root)
+    records = report.merge_events(report.load_archive(), history.read(gk.history_root))
     if not records:
         print("gozer report: no history yet -- nothing to report on", file=sys.stderr)
         return EXIT_UNAVAILABLE

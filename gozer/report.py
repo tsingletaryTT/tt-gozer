@@ -13,6 +13,17 @@ map, and a stable color per identity -- and renders it into
 client-side JS in that template already derives the timeline and incident
 log from the full embedded event list, so widening that list is enough for
 it to pick up every day on its own.
+
+`history_archive.jsonl`, checked into this package, recovers the 2026-09-03
+.. 2026-09-10 window that lived only in `/tmp/tt-gozer/history.jsonl` before
+`GOZER_HISTORY_ROOT` existed -- extracted back out of the last report
+rendered before that migration (commit e756fe2's docs/index.html), since
+that render is the only surviving copy: `/tmp/tt-gozer` does not survive a
+reboot, and `GOZER_HISTORY_ROOT` was never actually set on this box, so the
+live log kept resetting to empty regardless. `load_archive()`/`merge_events()`
+blend it back into every render() call so the published page reads as one
+continuous ledger instead of snapping back to whatever the live log happens
+to hold since the last reboot.
 """
 
 from __future__ import annotations
@@ -29,6 +40,7 @@ _PALETTE_COLORS = [
 ]
 
 _TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), "report_template.html")
+_ARCHIVE_PATH = os.path.join(os.path.dirname(__file__), "history_archive.jsonl")
 
 # Ordered (label, keywords) pairs -- first match wins. This is what stands
 # between the published page and leaking the literal --reason text of every
@@ -47,15 +59,28 @@ _REASON_THEMES = [
 ]
 
 
+_THEME_LABELS = {label for label, _ in _REASON_THEMES} | {"general work"}
+
+
 def theme_for_reason(reason: str | None) -> str:
     """Map a free-text --reason string to a small, public-safe theme label.
 
     Order matters: the first matching theme wins, so more specific themes
     (e.g. "serving a demo") are checked before broader ones that might also
     match the same words.
+
+    A reason that is already one of these labels is returned unchanged
+    rather than re-derived from keywords -- merge_events() routinely feeds
+    archived events back through render(), and their `reason` is already a
+    theme label, not raw text. Re-deriving it isn't just redundant: not
+    every label re-matches its own keywords (e.g. "exploration" doesn't
+    contain "explore"), so without this check some archived events would
+    silently drift to "general work" on every re-render.
     """
     if not reason:
         return "general work"
+    if reason in _THEME_LABELS:
+        return reason
     lowered = reason.lower()
     for label, keywords in _REASON_THEMES:
         if any(kw in lowered for kw in keywords):
@@ -126,6 +151,54 @@ def compute_stats(events: list[dict]) -> dict:
         },
         "roster": sorted(roster.values(), key=lambda r: r["held_s"], reverse=True),
     }
+
+
+def load_archive(path: str | None = None) -> list[dict]:
+    """Read the checked-in pre-migration events, oldest first.
+
+    `path` defaults to `history_archive.jsonl` alongside this module; a
+    missing or unreadable file returns `[]` rather than raising -- the
+    archive is a bonus, not something report generation should ever depend
+    on to run at all. A corrupt line is skipped, same rationale as
+    `history.read`.
+    """
+    try:
+        with open(path or _ARCHIVE_PATH) as f:
+            lines = f.readlines()
+    except OSError:
+        return []
+    records = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            records.append(json.loads(line))
+        except ValueError:
+            continue
+    return records
+
+
+def merge_events(archived: list[dict], live: list[dict]) -> list[dict]:
+    """Blend recovered archive events with the live history log.
+
+    De-duplicated by (event, lease_id, ts) so replaying the same archive
+    against a live log that has since re-derived the same events (e.g. a
+    second migration, or a caller passing the archive in twice) never
+    double-counts a grant or a release. Always sorted by ts, since
+    compute_stats() and render() both assume the event list they're given
+    is already in chronological order.
+    """
+    seen = set()
+    merged = []
+    for e in list(archived) + list(live):
+        key = (e.get("event"), e.get("lease_id"), e.get("ts"))
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(e)
+    merged.sort(key=lambda e: e["ts"])
+    return merged
 
 
 def derive_board_map(events: list[dict]) -> dict[str, list[str]]:

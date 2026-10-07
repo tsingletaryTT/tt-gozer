@@ -210,3 +210,84 @@ class TestRenderRedactsReasons:
         blob = json.loads(html[start:end].split(">", 1)[1])
         reasons = {e.get("reason") for e in blob if e.get("event") == "granted"}
         assert reasons == {"bring-up", "serving a demo", "general work"}
+
+
+class TestThemeForReasonIsIdempotent:
+    """Archived events already carry a theme label, not raw --reason text
+    (report.render redacted them before they were ever embedded). Feeding
+    those labels back through theme_for_reason -- which merge_events makes
+    routine -- must return the same label, not re-derive a different one
+    from an unlucky keyword collision."""
+
+    def test_every_theme_label_maps_to_itself(self):
+        from gozer import report
+
+        for label, _ in report._REASON_THEMES:
+            assert report.theme_for_reason(label) == label
+
+    def test_general_work_maps_to_itself(self):
+        from gozer import report
+
+        assert report.theme_for_reason("general work") == "general work"
+
+    def test_exploration_label_does_not_collapse_to_general_work(self):
+        # Regression: "exploration" doesn't contain the "explore" keyword it
+        # was themed from, so re-theming it used to fall through.
+        from gozer import report
+
+        assert report.theme_for_reason("exploration") == "exploration"
+
+
+class TestLoadArchive:
+    def test_returns_a_list_of_dicts(self):
+        from gozer import report
+
+        archived = report.load_archive()
+        assert isinstance(archived, list)
+        assert len(archived) > 0
+        assert all(isinstance(e, dict) for e in archived)
+        assert all("ts" in e and "event" in e for e in archived)
+
+    def test_returns_empty_list_for_a_missing_path(self, tmp_path):
+        from gozer import report
+
+        assert report.load_archive(str(tmp_path / "nope.jsonl")) == []
+
+    def test_reasons_are_already_theme_labels_not_raw_text(self):
+        from gozer import report
+
+        archived = report.load_archive()
+        labels = {label for label, _ in report._REASON_THEMES} | {"general work"}
+        reasons = {e["reason"] for e in archived if e.get("event") == "granted"}
+        assert reasons <= labels
+
+
+class TestMergeEvents:
+    def test_sorts_the_union_by_timestamp(self):
+        from gozer import report
+
+        archived = [{"event": "granted", "ts": "2026-09-01T00:00:00Z", "lease_id": "a1", "who": "claude:old"}]
+        live = [{"event": "granted", "ts": "2026-09-05T00:00:00Z", "lease_id": "l1", "who": "claude:alpha"}]
+        merged = report.merge_events(archived, live)
+        assert [e["lease_id"] for e in merged] == ["a1", "l1"]
+
+    def test_dedupes_an_event_present_in_both_lists(self):
+        from gozer import report
+
+        shared = {"event": "granted", "ts": "2026-09-05T00:00:00Z", "lease_id": "l1", "who": "claude:alpha"}
+        merged = report.merge_events([shared], [dict(shared)])
+        assert len(merged) == 1
+
+    def test_keeps_distinct_events_that_share_a_lease_id(self):
+        from gozer import report
+
+        granted = {"event": "granted", "ts": "2026-09-05T00:00:00Z", "lease_id": "l1", "who": "claude:alpha"}
+        released = {"event": "released", "ts": "2026-09-05T01:00:00Z", "lease_id": "l1", "who": "claude:alpha"}
+        merged = report.merge_events([granted], [released])
+        assert len(merged) == 2
+
+    def test_empty_archive_returns_live_unchanged(self):
+        from gozer import report
+
+        live = _events()
+        assert report.merge_events([], live) == sorted(live, key=lambda e: e["ts"])

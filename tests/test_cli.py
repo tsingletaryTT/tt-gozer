@@ -565,7 +565,10 @@ def test_gozer_history_root_env_var_redirects_the_log(env, capsys, tmp_path, mon
               for r in json.loads(out)["history"])
 
 
-def test_report_json_emits_computed_stats(env, capsys, tmp_path):
+def test_report_json_emits_computed_stats(env, capsys, tmp_path, monkeypatch):
+    from gozer import report
+
+    monkeypatch.setattr(report, "load_archive", lambda: [])
     _, acq_out = run(["acquire", "--chips", "1", "--who", "claude:x", "--json"], capsys)
     lease_id = json.loads(acq_out)["lease_id"]
     run(["release", lease_id], capsys)
@@ -575,6 +578,19 @@ def test_report_json_emits_computed_stats(env, capsys, tmp_path):
     data = json.loads(out)
     assert data["hero"]["entities"] == 1
     assert data["hero"]["grants"] == 1
+
+
+def test_report_blends_the_checked_in_archive_with_live_history(env, capsys):
+    _, acq_out = run(["acquire", "--chips", "1", "--who", "claude:x", "--json"], capsys)
+    lease_id = json.loads(acq_out)["lease_id"]
+    run(["release", lease_id], capsys)
+
+    code, out = run(["report", "--json"], capsys)
+    assert code == 0
+    data = json.loads(out)
+    who = {r["who"] for r in data["roster"]}
+    assert "claude:x" in who
+    assert len(who) > 1  # the pre-migration archive's identities are blended in too
 
 
 def test_report_writes_html_to_out_path(env, capsys, tmp_path):
@@ -590,6 +606,14 @@ def test_report_writes_html_to_out_path(env, capsys, tmp_path):
     assert "{{" not in html
 
 
-def test_report_refuses_when_history_is_empty(env, capsys):
+def test_report_refuses_when_archive_and_history_are_both_empty(env, capsys, monkeypatch):
+    from gozer import report
+
+    monkeypatch.setattr(report, "load_archive", lambda: [])
     code, out = run(["report", "--json"], capsys)
     assert code == 12  # EXIT_UNAVAILABLE
+
+
+def test_report_does_not_refuse_on_empty_history_when_archive_has_events(env, capsys):
+    code, out = run(["report", "--json"], capsys)
+    assert code == 0  # the checked-in archive alone is enough to report on

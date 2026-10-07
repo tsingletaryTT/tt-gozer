@@ -348,3 +348,53 @@ GOZER_ROOT directory being wiped out from under it) plus one CLI-level test in `
 "lost on reboot, that's just how it is" language appeared: `gozer/history.py` and
 `gozer/gatekeeper.py` module docstrings, README's State Format and Testing sections, and the
 design spec's Observability section. Full suite 260 tests green. Version bumped to 0.3.2.
+
+## `gozer report` blends recovered pre-migration history into every render (2026-09-21)
+
+**Original request:** the working-tree diff in `docs/index.html` showed the containment report
+snapping from a 182-hour, 41-identity window down to a 20-hour, 4-identity one. Root cause:
+`GOZER_HISTORY_ROOT` (added in the previous entry) was never actually set on this box, so
+`history.jsonl` kept living under `/tmp/tt-gozer` and kept resetting to empty on every reboot,
+same as before that feature existed. Ask: "do a kind of merge where this report will get the
+old data blended into the new data every time."
+
+The 2026-09-03..09-10 window wasn't gone, though -- it was still sitting, redacted, in the
+`<script type="application/json" id="gozer-events">` blob of the last report rendered before
+the migration (commit `e756fe2`'s `docs/index.html`), since a rendered report is the only thing
+that ever accumulated a long window in the first place. Extracted those 398 events back out and
+checked them in as `gozer/history_archive.jsonl` -- the one place in the repo that isn't wiped
+by a reboot, unlike `/tmp/tt-gozer`.
+
+New `report.load_archive()` reads that file (empty list on a missing/corrupt file, never
+raises); new `report.merge_events(archived, live)` unions it with `history.read(gk.history_root)`,
+de-duplicating on `(event, lease_id, ts)` and sorting by `ts` (`compute_stats`/`render` both
+assume the list they're handed is already chronological). `cmd_report` in `cli.py` now always
+merges the archive in before checking for emptiness or rendering -- so the page reads as one
+continuous ledger regardless of how much the live log has lost since the last reboot, and
+`gozer report` refuses (exit 12) only when *both* the archive and the live log are empty.
+
+One correctness wrinkle surfaced by feeding archived events back through the redaction path:
+archived events already carry a theme label in `reason` (they were redacted before ever being
+embedded), and `theme_for_reason` used to re-derive a label from keywords every time it was
+called. Most labels happen to contain their own trigger keyword ("debugging" contains "debug"),
+but `"exploration"` doesn't contain `"explore"` -- so re-theming an archived exploration event
+silently drifted it to `"general work"` on every re-render. Fixed by having `theme_for_reason`
+return a reason unchanged when it's already one of the known labels, rather than re-matching it.
+
+Regenerated `docs/index.html`: window now reads `2026-09-03 .. 2026-09-21` (446h, 42 entities)
+instead of snapping back to whatever the live log held since the last reboot.
+
+Deliberately not done: actually setting `GOZER_HISTORY_ROOT` persistently (e.g. in a shell
+profile or the `contrib/gozer-reconcile` timer's environment) so this stops recurring going
+forward. That's a machine/dotfiles change to `tt-home`, not a change to this repo's behavior,
+and wasn't what was asked -- the archive-and-merge is what makes the *report* durable against
+it recurring; the live log itself will still reset on every reboot until that env var is
+actually set somewhere persistent.
+
+TDD: `TestLoadArchive`, `TestMergeEvents`, `TestThemeForReasonIsIdempotent` in
+`tests/test_report.py`; `test_report_blends_the_checked_in_archive_with_live_history` and a
+reworked `test_report_refuses_when_archive_and_history_are_both_empty` (monkeypatching
+`report.load_archive` to `[]`, since the real archive is now always present) in
+`tests/test_cli.py`. Full suite 272 tests, 271 green -- the one failure
+(`test_history_survives_gozer_root_being_wiped`) predates this change and reproduces identically
+on `main` before it. Version bumped to 0.3.3.
