@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
 """The append-only history log: who held what, when, for how long.
 
 Everything else in this tool is present-tense: once a lease is released or

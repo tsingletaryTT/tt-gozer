@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
 """Gatekeeper.history_root: an optional persistent home for history.jsonl,
 decoupled from GOZER_ROOT (which stays ephemeral -- leases correctly vanish
 on reboot, but the audit trail shouldn't have to).

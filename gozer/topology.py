@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
 """Read Tenstorrent chip topology from sysfs.
 
 Deliberately never opens /dev/tenstorrent/* — reading a device node can disturb

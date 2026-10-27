@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
 """tt-gozer — cooperative Tenstorrent chip leasing.
 
 The keymaster must meet the gatekeeper for the coming of Gozer.

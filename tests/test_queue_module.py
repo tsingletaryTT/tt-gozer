@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
 """Exercise TicketQueue directly, with no Gatekeeper involved.
 
 This module intentionally imports only gozer.queue (never gozer.gatekeeper),

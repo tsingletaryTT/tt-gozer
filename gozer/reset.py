@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
 """Reset exactly the chips we leased, and nothing else.
 
 `tt-smi -r <bdf>[,<bdf>]` is per-ASIC. Verified against the vendor source:

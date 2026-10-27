@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
 """`HELD` versus `HELD-FOREIGN` for a lease taken with an owner pid.
 
 A supervisor that starts the model server as its own child holds the lease under

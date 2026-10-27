@@ -340,4 +340,16 @@ everything else is named so you can guess it.
 
 ## License
 
-Apache 2.0. See [LICENSE](LICENSE).
+This project is licensed under the **Apache License 2.0**. See the [LICENSE](LICENSE) file for details.
+Source files carry an SPDX header (`Apache-2.0`, copyright Tenstorrent USA, Inc.).
+
+### License understanding
+
+This software assists in programming Tenstorrent products. However, making, using, or selling hardware,
+models, or IP may require the license of rights (such as patent rights) from Tenstorrent or others. See
+[LICENSE_understanding.txt](LICENSE_understanding.txt) for details.
+
+### Other licenses
+
+gozer uses only the Python standard library. The tools it coordinates (`tt-smi`, tt-metal, vLLM and the
+models you run on leased chips) have their own licenses.

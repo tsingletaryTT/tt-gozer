@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
 # Runs gozer-reconcile.service every 5 minutes. See that file's comments for
 # why this exists and why it is never enabled automatically.
 

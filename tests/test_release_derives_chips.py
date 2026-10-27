@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
 """Keymaster.release takes its chips and device indices from the lease's units.
 
 The record's own `chips` and `dev_indices` lists are never used to decide what

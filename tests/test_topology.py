@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
 import pytest
 from gozer.topology import read_topology, lease_grain, all_chips, TopologyError
 from conftest import QUIETBOX, SINGLE_CHIP_BOARDS, GALAXY_LIKE

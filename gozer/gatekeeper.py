@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
 """The gatekeeper: guards the gate.
 
 Owns all lock state under GOZER_ROOT (default /tmp/tt-gozer):

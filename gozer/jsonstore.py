@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
 """Small state-file helpers shared by gatekeeper.py and queue.py.
 
 Lives in its own module, rather than in either of those two, so neither has

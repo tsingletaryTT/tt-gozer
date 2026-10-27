@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
 """Keymaster.reset: reset a held lease's chips and keep the lease.
 
 It borrows the revalidation pattern of Keymaster.release. The gate is re-read

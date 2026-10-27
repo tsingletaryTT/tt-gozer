@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
 """gozer/report.py: turning history.jsonl into the GH Pages containment report.
 
 TDD per the project convention -- written and confirmed to fail against a

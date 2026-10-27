@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
 import pytest
 from gozer.gatekeeper import Gatekeeper, parse_chip_request, utcnow
 from conftest import QUIETBOX, GALAXY_LIKE

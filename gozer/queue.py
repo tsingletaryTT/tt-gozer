@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
 """The FIFO ticket queue: who is waiting for chips, and in what order.
 
 Lives under GOZER_ROOT's `queue/` directory:

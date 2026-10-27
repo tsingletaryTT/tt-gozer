@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
 """Shared fixtures. Everything here fakes hardware so tests need no real box."""
 import os
 import pytest

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
 """Turn history.jsonl into the GH Pages containment report.
 
 `docs/index.html` used to be a hand-authored snapshot: someone read

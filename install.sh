@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
 # Install gozer: the CLI onto PATH, the three skills into ~/.claude/skills.
 #
 # Idempotent — safe to re-run. Links rather than copies, so a git pull updates

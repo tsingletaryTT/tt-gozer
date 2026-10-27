@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
 """The spec's headline concurrency requirement, exercised end to end.
 
 Spec line 454: "Concurrent `acquire` from N processes grants disjoint chip

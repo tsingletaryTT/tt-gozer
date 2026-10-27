@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
 """The keymaster: carries the key.
 
 Turns a request ("I need one chip") into a lease, the TT_VISIBLE_DEVICES the

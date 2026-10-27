@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
 """`gozer acquire --owner-pid N` — a supervisor holding a lease on behalf of
 work it manages (tt-station-agentd launching a serving container).
 

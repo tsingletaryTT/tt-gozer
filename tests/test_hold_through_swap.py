@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
 """The supervisor's sequence, as the CLI sees it.
 
 A supervisor takes a lease under its own pid, runs a model server as its child,

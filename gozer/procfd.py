@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
 """Kernel ground truth: which processes actually hold a Tenstorrent device open.
 
 This is the authority for free-vs-busy. A lease file records *who and why*; only

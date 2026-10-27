@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
 # Periodic `gozer reconcile`, so a crashed lease's lock gets cleared even
 # when nothing invokes gozer in between. Found on a real box: a crashed
 # agent's lease sat for over two hours because nobody happened to run a
