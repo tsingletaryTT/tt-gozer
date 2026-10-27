@@ -398,3 +398,43 @@ reworked `test_report_refuses_when_archive_and_history_are_both_empty` (monkeypa
 `tests/test_cli.py`. Full suite 272 tests, 271 green -- the one failure
 (`test_history_survives_gozer_root_being_wiped`) predates this change and reproduces identically
 on `main` before it. Version bumped to 0.3.3.
+
+## Release waits for a fast-exiting command's holders (2026-10-28, 0.3.4)
+
+Prompt (tt-orchard issue 117): a `gozer run --chips 1 --exact 1 -- <command>` ended with
+`chips [0, 1] still open by [pid]`, a stale lease and no reset, after a command that failed in
+about a second.
+
+Cause, reproduced on a real board. `Keymaster.run` released the lease right after the command
+was reaped, with one `/proc` scan. A command that forks a worker (no exec, so the device fd
+arrives with it even though the fd is close-on-exec) and then exits leaves that worker holding
+the device until the worker ends. A plain open and exit, with or without `close_device`, never
+refused in 8 runs. A command that opened the device, forked a worker that slept 1.5 s and
+exited at once refused 6 of 6 times in about 2.6 s, left a STALE lease on the board and did not
+reset it. The refusal text and timing match the issue. Which process held the device in the
+original occurrence is not known (the issue names one pid and does not say whether it was the
+command itself); a reaped process cannot hold a descriptor, so a helper or worker of the
+command is the likely holder.
+
+Fix: `release(..., settle=SECONDS)` re-scans every 0.25 s while a device of the lease is open,
+and goes on to the reset when the holders are gone. `run`'s release passes
+`RELEASE_SETTLE_SECONDS` (10 s). If a process still holds the device after that, the refusal is
+the same as before, with the wait added to the message and to the history record
+(`waited_s`). `gozer release` by hand, `reset` and `--force` do not wait. The reset still never
+runs while a live process holds one of the lease's devices, and nothing outside the lease is
+looked at differently.
+
+Measured (one 2-chip board, a one-chip lease, `bin/gozer` of this worktree):
+before, 8 of 8 `os._exit` runs released normally (about 44.5 s each) and 6 of 6 forked-worker
+runs refused (about 2.6 s, stale lease). After, 6 of 6 forked-worker runs released and reset
+(45.6 to 45.9 s, the 1.6 s wait stated in the message), and a worker that lives 15 s was
+refused after 10.1 s.
+
+TDD: `tests/test_release_settle.py` (7 tests, all red before the change; fake `/proc`, fake
+clock). 13 mutations (no loop, no wait from `run`, wait with `--force`, no re-scan, never
+refuse, unbounded or doubled bound, no sleep, nonzero default, missing messages and log
+field), all red. Full suite 400 passed.
+
+Not done: a holder that stays longer than 10 s is still a refusal that leaves a stale lease
+(the caller can run `gozer reconcile` and the next lease resets). Whether a child of a
+compile step is what held the device in the original run was not shown.
