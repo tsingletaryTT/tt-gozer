@@ -25,4 +25,10 @@ The keymaster must meet the gatekeeper for the coming of Gozer.
 # -- into every render, via report.load_archive()/merge_events(). The
 # published page reads as one continuous ledger again instead of snapping
 # back to whatever the live log happens to hold since the last reboot.
-__version__ = "0.3.3"
+#
+# 0.3.4: `gozer run`'s release waits up to 10 s for a device to close before
+# it refuses (keymaster.RELEASE_SETTLE_SECONDS). A command that exited fast
+# could leave a forked worker holding the device for a second or two; the
+# release refused, left a stale lease and skipped the reset (tt-orchard issue
+# 117). `gozer release` by hand is unchanged.
+__version__ = "0.3.4"

@@ -13,6 +13,7 @@ import signal
 import socket
 import subprocess
 import sys
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
@@ -66,11 +67,25 @@ class ResetResult:
     message: str
 
 
+# How long `gozer run`'s own release waits for a device to close before it
+# refuses. A command that exits fast (a compile error, a crash) can leave a
+# forked worker or a helper holding the device for a moment after the command
+# itself is reaped. Those holders end within a second or two, and a refusal
+# here leaves a stale lease and chips that were never reset. A holder that is
+# still there after this long is treated as real work and the refusal stands.
+# `gozer release` by hand does not wait: its caller chose the moment.
+RELEASE_SETTLE_SECONDS = 10.0
+RELEASE_SETTLE_POLL_SECONDS = 0.25
+
+
 class Keymaster:
     def __init__(self, gatekeeper: Gatekeeper):
         self.gk = gatekeeper
         # Swappable so tests never shell out to a real tt-smi.
         self.reset_runner = subprocess.run
+        # Swappable so tests never really wait (see RELEASE_SETTLE_SECONDS).
+        self.sleep = time.sleep
+        self.monotonic = time.monotonic
 
     # ---- acquire ----------------------------------------------------------
 
@@ -282,7 +297,7 @@ class Keymaster:
         return out
 
     def release(self, lease_id: str, no_reset: bool = False,
-                force: bool = False) -> tuple[bool, str]:
+                force: bool = False, settle: float = 0.0) -> tuple[bool, str]:
         """Give the chips back: verify, reset, unlock, notify the queue.
 
         The ordering here is the whole point, and it is not obvious.
@@ -346,14 +361,31 @@ class Keymaster:
 
         fd_map = procfd.holders(self.gk.proc_root)
         still_open = [d for d in derived_devs if fd_map.get(d)]
+        waited = 0.0
+        if still_open and not force and settle > 0:
+            # Give a just-exited command's leftovers a bounded moment to let
+            # go. Every pass re-reads /proc, so a holder that is still alive
+            # at the end is seen as alive and the refusal below still fires.
+            start = self.monotonic()
+            while still_open and self.monotonic() - start < settle:
+                self.sleep(RELEASE_SETTLE_POLL_SECONDS)
+                fd_map = procfd.holders(self.gk.proc_root)
+                still_open = [d for d in derived_devs if fd_map.get(d)]
+            waited = self.monotonic() - start
+            if not still_open:
+                messages.append(
+                    f"devices were still open for {waited:.1f} s after the "
+                    "command exited; released once they closed")
         if still_open and not force:
             history.log(self.gk.history_root, "refused", action="release",
                        lease_id=lease_id, who=lease.get("who"),
-                       reason="device still open", dev_indices=still_open)
+                       reason="device still open", dev_indices=still_open,
+                       waited_s=round(waited, 2))
             return False, (
                 f"chips {still_open} still open by "
-                f"{sorted({p for d in still_open for p in fd_map[d]})} -- "
-                "let the work finish, or pass --force")
+                f"{sorted({p for d in still_open for p in fd_map[d]})}"
+                + (f" after waiting {waited:.1f} s" if waited else "")
+                + " -- let the work finish, or pass --force")
 
         # First revalidation: are these units still ours, right now, with
         # nobody able to claim them while we look?
@@ -689,7 +721,8 @@ class Keymaster:
                 # auto-cleanup was invisible anywhere except the bare
                 # reset_ok=false in history.jsonl. Print it here so both paths
                 # report the same thing.
-                _, msg = self.release(grant.lease_id)
+                _, msg = self.release(grant.lease_id,
+                                      settle=RELEASE_SETTLE_SECONDS)
                 if msg:
                     print(f"gozer run: {msg}", file=sys.stderr)
         finally:
