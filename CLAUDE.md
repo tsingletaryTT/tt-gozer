@@ -555,3 +555,26 @@ Prompt: "yes do them please", for items 2 and 4 of the tt-orchard relay (items 3
 TDD: `tests/test_renew_heartbeat.py` (9), `tests/test_orphan_holders.py` (11), red before; 4
 mutations (grace ignores renewed_at, owner_dead always False, no reconcile warning, renew skips the
 gate copy) all red. Full suite 461.
+
+## history.jsonl gets a durable default (2026-10-30, 0.3.9)
+
+Prompt: while planning the release site, the user noted "we were supposed to be using a more perm
+log spot", then "let's make a ~/.local log dir for gozer". The 2026-09-10 entry added
+`GOZER_HISTORY_ROOT` but never set it anywhere (the 2026-09-21 entry says so), so the 2026-10-22..30
+log (about 950 events) was still in `/tmp/tt-gozer` and would have gone at the next reboot.
+
+* With no `root` argument, no `GOZER_ROOT` and no `GOZER_HISTORY_ROOT`, `Gatekeeper.history_root` is
+  `$XDG_STATE_HOME/tt-gozer`, else `~/.local/state/tt-gozer` (created without the sticky/world-writable
+  bits the gate dirs get). A named root, by argument or `GOZER_ROOT`, keeps history beside it, so
+  tests and custom setups behave as before; `GOZER_HISTORY_ROOT` still overrides both.
+* This overturns a line in `gozer/history.py` that said the log should not be a per-user path, to keep
+  one timeline across users. It is per user now, as asked; every agent on this box runs as one user, so
+  nothing fragments here. A multi-user box points `GOZER_HISTORY_ROOT` at a shared directory.
+* Migrated by hand: merged `/tmp/tt-gozer/history.jsonl` into `~/.local/state/tt-gozer/history.jsonl`
+  (de-duplicated on ts, event, lease, ticket, who: 956 events, 2026-10-22 to 30), and kept an untouched
+  copy as `history-backup-2026-10-30.jsonl`. No migration code: the live `bin/gozer` of this checkout is what every
+  agent runs, so the switch took effect for all of them as soon as the change was in the tree.
+* Not done: `history_archive.jsonl` in the repo still ends at 2026-09-10. `gozer report` reads the
+  archive plus the live log, so the page now covers both, but the archive is not extended.
+
+TDD: `tests/test_default_history_dir.py` (7; red against the old default). Full suite 468.

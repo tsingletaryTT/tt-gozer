@@ -288,7 +288,7 @@ they read the output. If `status` shows `STALE`, run `gozer reconcile` to clear 
   queue/<seq>-<ticket>.json      FIFO, zero-padded seq
   queue/.claim-window            ticket entitled to claim, 90s expiry
   mutex/.gatekeeper.lock/        allocator mutex, self-heals after 30s
-  history.jsonl                  append-only log: granted, queued, released,
+  history.jsonl                  (in ~/.local/state/tt-gozer by default) append-only log: granted, queued, released,
                                   reset, reaped, adopted, refused -- one JSON object
                                   per line, forever (see below)
 ```
@@ -299,12 +299,13 @@ All plain files. Inspect with `ls` and `cat`; recover by hand if you ever need t
 only place `gozer` remembers anything past-tense. Everything else in this state directory is
 present-tense and vanishes the moment a lease is released or reaped, which is exactly why
 `gozer history` exists -- to answer "who had the chips two hours ago" after the gate itself has
-already forgotten. By default it lives right alongside the rest of `/tmp/tt-gozer` and does not
-survive a reboot -- leases/gate/queue *should* vanish on reboot (the chips get reset), and until
-2026-09-10 the history log inherited that fate too, purely as a side effect of sharing a
-directory with them. Set `GOZER_HISTORY_ROOT` to a path outside `/tmp` (e.g.
-`~/.local/state/tt-gozer`) to keep the audit trail across reboots while leases/gate/queue stay
-ephemeral under `GOZER_ROOT` as before; leave it unset and nothing changes. Each line is written
+already forgotten. By default it lives in `~/.local/state/tt-gozer` (or
+`$XDG_STATE_HOME/tt-gozer`) and survives a reboot, while leases/gate/queue stay ephemeral under
+`/tmp/tt-gozer` (they *should* vanish on reboot, since the chips get reset). Before 0.3.9 the
+log lived under `/tmp` with them and was lost at every reboot. If you name a root yourself
+(`GOZER_ROOT`), the log stays beside it; `GOZER_HISTORY_ROOT` overrides both. The default is per
+user: on a box with several users each sees the commands they ran, so point everyone's
+`GOZER_HISTORY_ROOT` at one shared directory for a single timeline. Each line is written
 with a single `write()` call on a file opened `O_APPEND`, which is atomic on Linux for writes
 under `PIPE_BUF` (4096 bytes), so concurrent agents logging at the same moment cannot interleave
 a torn line. Logging is best-effort: a full disk or a permissions problem is swallowed rather

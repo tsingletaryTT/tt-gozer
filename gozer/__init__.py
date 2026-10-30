@@ -57,4 +57,9 @@ The keymaster must meet the gatekeeper for the coming of Gozer.
 # says whether it was reaped (when, why) or already released; `status` and
 # `reconcile` say when a lease's owner pid is dead (holder and container named
 # when visible, a warning that other users' containers are invisible when not).
-__version__ = "0.3.8"
+#
+# 0.3.9: history.jsonl defaults to ~/.local/state/tt-gozer (XDG_STATE_HOME) when
+# no root or history root is named, so it survives a reboot. It was under
+# GOZER_ROOT in /tmp and lost every time; nothing had ever set
+# GOZER_HISTORY_ROOT. A named root keeps history beside it, as before.
+__version__ = "0.3.9"
