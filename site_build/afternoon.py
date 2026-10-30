@@ -17,17 +17,34 @@ KEEP_KEYS = ("ts", "event", "who", "chips", "lease_id", "ticket", "duration_s")
 RAPID_UNDER_S = 120   # a lease shorter than this counts as a rapid cycle
 RAPID_MIN_COUNT = 3   # fewer rapid leases than this is not worth reporting
 
-# Palette from the brand colours plus two darker tints from the same family.
-# (background, text colour that stays readable on it)
+# Block colours: the brand family (blues, teals, greens, yellow, orange-red)
+# plus a brown and greys, so each agent in a busy afternoon gets its own colour.
+# Each entry is chosen so that either dark or white text reaches 4.5:1 on it.
 PALETTE = [
-    ("#1B8EB1", "#FFFFFF"),
-    ("#6FABA0", "#092221"),
-    ("#F6BC42", "#092221"),
-    ("#FA512E", "#FFFFFF"),
-    ("#74C5DF", "#092221"),
-    ("#136B85", "#FFFFFF"),
-    ("#3F7A70", "#FFFFFF"),
+    "#2AA3C8", "#1A7A9C", "#136B85", "#74C5DF", "#6FABA0", "#3F7A70",
+    "#A7D8C9", "#F6BC42", "#E8743B", "#C93A18", "#8C5A2B", "#5C6B6A", "#B9C4C3",
 ]
+DARK_TEXT, LIGHT_TEXT = "#092221", "#FFFFFF"
+
+
+def _luminance(hex_colour: str) -> float:
+    """WCAG relative luminance of a #RRGGBB colour."""
+    chans = []
+    for i in (1, 3, 5):
+        c = int(hex_colour[i:i + 2], 16) / 255
+        chans.append(c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4)
+    return 0.2126 * chans[0] + 0.7152 * chans[1] + 0.0722 * chans[2]
+
+
+def contrast(bg: str, fg: str) -> float:
+    """WCAG contrast ratio between two #RRGGBB colours."""
+    hi, lo = sorted((_luminance(bg), _luminance(fg)), reverse=True)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def text_colour(bg: str) -> str:
+    """Whichever of dark or white text has the higher contrast on `bg`."""
+    return max((DARK_TEXT, LIGHT_TEXT), key=lambda fg: contrast(bg, fg))
 
 
 def _slim(e: dict) -> dict:
@@ -36,14 +53,15 @@ def _slim(e: dict) -> dict:
 
 def extract(events: list[dict], start: str, end: str) -> list[dict]:
     """Granted and queued events in [start, end], plus the releases of those grants."""
-    granted_ids = {e.get("lease_id") for e in events
-                   if e.get("event") == "granted" and start <= e["ts"] <= end}
+    granted_ids = {e["lease_id"] for e in events
+                   if e.get("event") == "granted" and e.get("lease_id")
+                   and start <= e["ts"] <= end}
     out = []
     for e in events:
         kind = e.get("event")
         if kind in ("granted", "queued") and start <= e["ts"] <= end:
             out.append(_slim(e))
-        elif kind == "released" and e.get("lease_id") in granted_ids:
+        elif kind == "released" and e.get("lease_id") and e["lease_id"] in granted_ids:
             out.append(_slim(e))
     return sorted(out, key=lambda r: r["ts"])
 
@@ -121,11 +139,11 @@ def captions(f: dict) -> list[str]:
     out = []
     if "longest_hold" in f:
         h = f["longest_hold"]
-        out.append(f"{h['who']} held a board for {_dur(h['seconds'])}, the longest lease of the afternoon.")
+        out.append(f"{h['who']} held a board for {_dur(h['seconds'])}, the longest lease in this log.")
     if "rapid_cycles" in f:
         c = f["rapid_cycles"]
         out.append(f"{c['who']} took and released a board {c['count']} times, "
-                   f"each lease lasting about {_dur(c['typical_s'])}.")
+                   f"a typical lease lasting about {_dur(c['typical_s'])}.")
     for w in f.get("waits", []):
         out.append(f"{w['who']} queued and waited {_dur(w['seconds'])} for a board.")
     if f.get("fastest_handoff_s") is not None:
@@ -169,7 +187,8 @@ def lanes_html(records: list[dict], start: str, end: str) -> str:
     t0, t1 = _epoch(start), _epoch(end)
     span = max(t1 - t0, 1)
     who_list = sorted({l["who"] for l in leases})
-    colour = {w: PALETTE[i % len(PALETTE)] for i, w in enumerate(who_list)}
+    colour = {w: (PALETTE[i % len(PALETTE)], text_colour(PALETTE[i % len(PALETTE)]))
+              for i, w in enumerate(who_list)}
     esc = html.escape
 
     rows = []
@@ -178,7 +197,7 @@ def lanes_html(records: list[dict], start: str, end: str) -> str:
         for l in (x for x in leases if x["board"] == b):
             s = max(_epoch(l["start"]), t0)
             if l["end"] is None:
-                e, tag = t1, "still running"
+                e, tag = t1, "no release recorded"
             elif _epoch(l["end"]) > t1:
                 e, tag = t1, "continues"
             else:
@@ -186,7 +205,7 @@ def lanes_html(records: list[dict], start: str, end: str) -> str:
             left = 100.0 * (s - t0) / span
             width = max(100.0 * (e - s) / span, 0.3)
             bg, fg = colour[l["who"]]
-            title = f"{l['who']}, {l['start']} to {l['end'] or 'no release recorded'}"
+            title = f"{l['who']}, {l['start']} to {l['end'] or 'now'}"
             if tag:
                 title += f" ({tag})"
             label = esc(l["who"]) + (f" ({tag})" if tag else "")

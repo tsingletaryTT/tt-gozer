@@ -81,7 +81,8 @@ def test_lane_html_escapes_agent_names():
     out = lanes_html([g("2026-10-26T17:00:00Z", name, "x"), r("2026-10-26T18:00:00Z", name, "x", 3600)],
                      START, END)
     assert "<b>" not in out
-    assert "a&lt;b&gt;&amp;&quot;c:d" in out or "a&lt;b&gt;&amp;&#x27;c:d" in out or "a&lt;b&gt;&amp;" in out
+    assert "a&lt;b&gt;&amp;&quot;c:d" in out
+    assert "a<b>" not in out
 
 
 def test_lease_ending_after_the_window_is_clipped_and_labelled_continues():
@@ -95,9 +96,9 @@ def test_lease_ending_after_the_window_is_clipped_and_labelled_continues():
     assert abs(left + width - 100.0) < 0.05
 
 
-def test_lease_with_no_release_is_labelled_still_running():
+def test_lease_with_no_release_is_labelled_no_release_recorded():
     out = lanes_html([g("2026-10-26T17:00:00Z", "claude:a", "x")], START, END)
-    assert "still running" in out
+    assert "no release recorded" in out and "still running" not in out
 
 
 def test_no_queue_events_still_renders():
@@ -176,3 +177,49 @@ def test_extract_window_edges_are_inclusive():
     ev = [g(START, "claude:a", "s"), g(END, "claude:a", "e"),
           g("2026-10-26T15:59:59Z", "claude:a", "before"), g("2026-10-26T20:30:01Z", "claude:a", "after")]
     assert [e["lease_id"] for e in extract(ev, START, END)] == ["s", "e"]
+
+
+def _wcag(bg, fg):
+    """Independent WCAG contrast computation (not the production helper)."""
+    def lum(h):
+        v = [int(h[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+        v = [x / 12.92 if x <= 0.03928 else ((x + 0.055) / 1.055) ** 2.4 for x in v]
+        return 0.2126 * v[0] + 0.7152 * v[1] + 0.0722 * v[2]
+    a, b = sorted((lum(bg), lum(fg)), reverse=True)
+    return (a + 0.05) / (b + 0.05)
+
+
+def _blocks(out):
+    import re
+    return re.findall(r'class="lease" style="[^"]*?background:(#[0-9A-Fa-f]{6});color:(#[0-9A-Fa-f]{6});', out)
+
+
+def test_every_block_text_colour_meets_4_5_contrast():
+    from site_build.afternoon import PALETTE
+    recs = [g("2026-10-26T17:00:00Z", f"claude:n{i}", f"l{i}") for i in range(len(PALETTE))]
+    pairs = _blocks(lanes_html(recs, START, END))
+    assert len(pairs) == len(PALETTE)
+    for bg, fg in pairs:
+        assert _wcag(bg, fg) >= 4.5, (bg, fg)
+
+
+def test_each_agent_on_the_committed_afternoon_has_its_own_colour():
+    recs = committed()
+    agents = {x["who"] for x in recs if x["event"] == "granted"}
+    pairs = _blocks(lanes_html(recs, START, END))
+    assert len({bg for bg, _ in pairs}) == len(agents)
+    for bg, fg in pairs:
+        assert _wcag(bg, fg) >= 4.5, (bg, fg)
+
+
+def test_caption_calls_the_47_seconds_typical_and_the_hold_longest_in_the_log():
+    text = " ".join(captions(facts(committed())))
+    assert "a typical lease lasting about 47 seconds" in text
+    assert "the longest lease in this log" in text
+    assert "each lease" not in text and "of the afternoon" not in text
+
+
+def test_release_without_lease_id_does_not_match_a_grant_without_lease_id():
+    ev = [{"ts": "2026-10-26T17:00:00Z", "event": "granted", "who": "claude:a"},
+          {"ts": "2026-10-26T21:00:00Z", "event": "released", "who": "claude:b", "duration_s": 5}]
+    assert [e["event"] for e in extract(ev, START, END)] == ["granted"]
