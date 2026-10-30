@@ -168,8 +168,9 @@ Every command also accepts `--json` for machine-readable output.
 
 `gozer report` turns the whole history log into `docs/log.html` -- the old "Containment Log"
 page, which the site no longer links to -- recomputing every roster stat, hero number, and board/chip
-mapping from the live log instead of anyone hand-typing them. It never touches hardware; run it
-and commit `docs/log.html` if you want that page current. `docs/index.html` is a different
+mapping from the live log instead of anyone hand-typing them. It never touches hardware. Inside a
+git checkout it writes `docs/log.html`; that file is generated, is listed in `.gitignore` and is not
+committed. `--out` writes it somewhere else. `docs/index.html` is a different
 page: the explainer, built by `scripts/build_site.py`, and `gozer report` never writes it. `--json` prints the
 same computed stats without rendering HTML, for scripting.
 

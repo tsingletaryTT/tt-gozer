@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
-"""Turn history.jsonl into the GH Pages containment report.
+"""Turn history.jsonl into the containment-log page (`docs/log.html`).
 
 The containment-log page (now `docs/log.html`, no longer linked from the
 site; `docs/index.html` is the explainer built by `scripts/build_site.py`)
@@ -25,7 +25,7 @@ rendered before that migration (commit e756fe2's docs/index.html, which was the 
 that render is the only surviving copy: `/tmp/tt-gozer` does not survive a
 reboot, and `GOZER_HISTORY_ROOT` was never actually set on this box, so the
 live log kept resetting to empty regardless. `load_archive()`/`merge_events()`
-blend it back into every render() call so the published page reads as one
+blend it back into every render() call so the generated page reads as one
 continuous ledger instead of snapping back to whatever the live log happens
 to hold since the last reboot.
 """

@@ -4,7 +4,7 @@
 
 `roster()` totals each agent's leases, hold time and waiting from the example
 afternoon's records. It is sorted by name. It is an example of what the log
-records, not a ranking.
+records. It lists agents by name and does not order them by usage.
 
 `load_users()` reads `site/data/users.json` and checks every entry.
 """
