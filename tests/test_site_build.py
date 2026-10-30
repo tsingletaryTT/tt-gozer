@@ -15,6 +15,7 @@ import sys
 import pytest
 
 from site_build.afternoon import captions, contrast, facts
+from site_build.build import SWEEP
 from site_build.roster import load_users
 from site_build.transcripts import run_session
 
@@ -173,8 +174,26 @@ def test_check_flag_exits_1_when_docs_differ(tmp_path):
 def test_page_text_passes_the_style_sweep(page):
     prose = _visible_prose(page)
     assert len(prose) > 1500, "the prose extraction found too little text"
-    for phrase in (", not ", "rather than", "instead of", "reads as", "honest"):
-        assert phrase not in prose.lower(), phrase
+    for phrase in SWEEP:
+        assert phrase.lower() not in prose.lower(), phrase
+
+
+def test_page_makes_no_platform_testing_claim(page):
+    # No CI has run a platform matrix yet; the page must not claim one.
+    assert "tested on" not in html.unescape(page).lower()
+
+
+def test_phone_text_sizes():
+    """In the phone rules, table cells are at least 14px and terminals at least 13.5px."""
+    css = open(CSS).read()
+    phone = css[css.index("@media (max-width: 480px)"):]
+    sizes = {sel.strip(): float(px) for sel, px in
+             re.findall(r"([^{}]+)\{[^}]*?font-size:\s*([\d.]+)px", phone)}
+    for sel, px in sizes.items():
+        if any(k in sel for k in ("table", "td", "th")):
+            assert px >= 14, (sel, px)
+        if ".term" in sel:
+            assert px >= 13.5, (sel, px)
 
 
 def _css_vars():

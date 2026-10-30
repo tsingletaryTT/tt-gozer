@@ -106,7 +106,8 @@ def _run(argv):
 
 _LEASE_FIXED = ["0d219a", "f2ae86", "7b31c4"]
 _TICKET_FIXED = ["8fce", "a3d1", "c9e7"]
-_PID_FIXED = [4121, 4187, 4260]
+_PID_FIXED = [4121, 4187, 4203]
+_CHIP_LINE_RE = re.compile(r"^(\s+chip .*\s)(\S+) pid \d+$")
 _TS_RE = re.compile(r"\b20\d\d-\d\d-\d\dT\d\d:\d\d:\d\dZ")
 
 
@@ -126,6 +127,12 @@ class _Session:
         self.lease = _Mapper(_LEASE_FIXED)
         self.ticket = _Mapper(_TICKET_FIXED)
         self.pid = _Mapper(_PID_FIXED)
+        # Status lines get one pid per agent, keyed by the agent's name. The
+        # session runs every command inside this one Python process, so the
+        # real pids recorded for different agents are often identical; on a
+        # real box each agent's process has its own pid, and the page should
+        # show that. Same fixed values, assigned by first appearance.
+        self.agent_pid = _Mapper(_PID_FIXED)
         # Index of the step being normalised. Every timestamp in step k's
         # text becomes 16:<k>:00, so the result never depends on whether two
         # real events happened to share a wall-clock second.
@@ -150,8 +157,15 @@ def normalise(text, _s=None):
     # a ticket id appears as "ticket X" and as the argument of "gozer wait X"
     text = re.sub(r"\b(ticket|wait) ([0-9a-f]{4})\b",
                   lambda m: m.group(1) + " " + s.ticket(m.group(2)), text)
-    text = re.sub(r"(?<=pid )\d+", lambda m: s.pid(m.group(0)), text)
-    return text
+    lines = []
+    for line in text.split("\n"):
+        m = _CHIP_LINE_RE.match(line)
+        if m:   # a status chip line: "<...> <who> pid <N>", one pid per agent
+            line = m.group(1) + m.group(2) + " pid " + s.agent_pid(m.group(2))
+        else:   # e.g. "owner pid N": map the real pid as before
+            line = re.sub(r"(?<=pid )\d+", lambda m: s.pid(m.group(0)), line)
+        lines.append(line)
+    return "\n".join(lines)
 
 
 # ----- the session ---------------------------------------------------------

@@ -42,6 +42,15 @@ USERS = os.path.join(SITE, "data", "users.json")
 # The window the extract was cut to (scripts/make_afternoon_extract.py).
 WINDOW_START, WINDOW_END = "2026-10-26T16:00:00Z", "2026-10-26T20:30:00Z"
 
+# Phrases the plain-English rules (global CLAUDE.md) keep out of the prose
+# written for this page. tests/test_site_build.py sweeps the page's visible
+# prose (terminal blocks and data regions excluded) for each of them.
+SWEEP = (
+    ", not ", "rather than", "instead of", "reads as", "honest",
+    "the one that", "which is why", "This is what", "load-bearing",
+    "open the door", "carries the story", "on-ramp", "the tell",
+)
+
 # The note shown beside each step of the session, keyed by Step.note_key.
 # Each one says what happened in that step's real output and why it matters,
 # for a reader who has never heard of gozer. Keep them true to the output:

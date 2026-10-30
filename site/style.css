@@ -228,12 +228,14 @@ footer p { margin: 0; }
   section { padding: 40px 0; }
   .term { font-size: 13.5px; padding: 12px; }
   .figure { padding: 8px; }
-  /* The example table fits a phone: names break after the colon, durations wrap. */
-  table { min-width: 0; width: 100%; font-size: 13.5px; }
+  /* The example table on a phone: names break after the colon, durations
+     wrap, text stays at 14px. Where it is still too wide (about 360px and
+     below) it scrolls inside .table-wrap. */
+  table { min-width: 0; width: 100%; font-size: 14px; }
   th, td { padding: 6px 3px; white-space: normal; }
-  th { font-size: 13px; }
+  th { font-size: 14px; }
   th:first-child, td:first-child { padding-left: 4px; }
   th:last-child, td:last-child { padding-right: 4px; }
-  td.who { font-size: 12px; padding-right: 0; }
+  td.who { font-size: 14px; padding-right: 0; }
   td.who .nw { display: block; }
 }

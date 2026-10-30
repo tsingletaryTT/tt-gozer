@@ -239,13 +239,15 @@ footer p { margin: 0; }
   section { padding: 40px 0; }
   .term { font-size: 13.5px; padding: 12px; }
   .figure { padding: 8px; }
-  /* The example table fits a phone: names break after the colon, durations wrap. */
-  table { min-width: 0; width: 100%; font-size: 13.5px; }
+  /* The example table on a phone: names break after the colon, durations
+     wrap, text stays at 14px. Where it is still too wide (about 360px and
+     below) it scrolls inside .table-wrap. */
+  table { min-width: 0; width: 100%; font-size: 14px; }
   th, td { padding: 6px 3px; white-space: normal; }
-  th { font-size: 13px; }
+  th { font-size: 14px; }
   th:first-child, td:first-child { padding-left: 4px; }
   th:last-child, td:last-child { padding-right: 4px; }
-  td.who { font-size: 12px; padding-right: 0; }
+  td.who { font-size: 14px; padding-right: 0; }
   td.who .nw { display: block; }
 }
 </style>
@@ -340,8 +342,8 @@ granted: chips 0,1  (units 0000000000000002)
 <pre class="term"><span class="prompt">$ </span><span class="cmd">gozer status</span>
 grain: board   (2 boards, 4 chips)
 board 0000000000000002  (p300c)
-  chip 0  0000:01:00.0  CLAIMED          claude:sdxl pid 4187
-  chip 1  0000:02:00.0  CLAIMED          claude:sdxl pid 4187
+  chip 0  0000:01:00.0  CLAIMED          claude:sdxl pid 4203
+  chip 1  0000:02:00.0  CLAIMED          claude:sdxl pid 4203
 board 0000000000000001  (p300c)
   chip 2  0000:03:00.0  CLAIMED          claude:eval pid 4187
   chip 3  0000:04:00.0  CLAIMED          claude:eval pid 4187</pre>
@@ -392,9 +394,9 @@ reset ok</pre>
     <h2>How it works</h2>
     <div class="how-grid">
       <ol class="how-steps">
-        <li><strong>A lease for each board.</strong> You ask for a number of chips. gozer grants a whole board, because the Tenstorrent runtime makes chips visible one board at a time: asking for one chip exposes both chips on its board. Each agent points the runtime at the chips it was given, so two agents on two boards stay out of each other's way.</li>
+        <li><strong>A lease for each board.</strong> You ask for a number of chips. gozer leases a whole board, because the Tenstorrent runtime's device visibility works at board level: a grant of one chip can expose both chips on its board. Each agent points the runtime at the chips it was given, so two agents on two boards stay out of each other's way.</li>
         <li><strong>A queue.</strong> If no board is free, you get a ticket and a place in line. Your agent can keep doing work that needs no chips. When it runs <code>gozer wait</code> with the ticket, gozer hands it the chips as soon as a board is released.</li>
-        <li><strong>A check that a chip is really in use.</strong> A lease record only says who asked. gozer also looks for an open device file under <code>/dev/tenstorrent</code>, which proves a process is using the chip. When a lease's process has ended and its device is closed, gozer clears the lease the next time someone asks for chips, so a crashed agent cannot hold a board forever.</li>
+        <li><strong>A check that a chip is really in use.</strong> A lease record only says who asked. gozer also looks for an open device file under <code>/dev/tenstorrent</code>, which proves a process is using the chip. When a lease's process has ended and its device is closed, gozer clears the lease the next time someone asks for chips. A lease taken by a bare <code>gozer acquire</code> has no process to watch, so gozer clears it only after 900 seconds (15 minutes) have passed since the grant with no device open. Either way, a crashed agent cannot hold a board forever.</li>
       </ol>
       <div class="figure">
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 616" width="360" height="616" role="img" aria-labelledby="how-diagram-title how-diagram-desc">
@@ -450,7 +452,7 @@ reset ok</pre>
 <section id="install">
   <div class="wrap">
     <h2>Install</h2>
-    <p>gozer is a small Python program. It needs Python 3.10 or newer, and <code>tt-smi</code> to reset chips. The Debian package is tested on Debian 12, Ubuntu 22.04 and Ubuntu 24.04.</p>
+    <p>gozer is a small Python program. It needs Python 3.10 or newer, and <code>tt-smi</code> to reset chips. The Debian package is a single architecture-independent file for Debian and Ubuntu.</p>
     <ol class="install-steps">
       <li>Install the package from the <a href="https://github.com/tsingletaryTT/tt-gozer/releases/latest">latest release</a>.
 <pre class="term"><span class="prompt">$ </span><span class="cmd">sudo apt install <span class="nw">./tt-gozer_0.3.9_all.deb</span></span></pre></li>

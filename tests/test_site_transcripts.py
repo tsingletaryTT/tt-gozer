@@ -57,8 +57,37 @@ def test_no_real_ids_or_times_survive(monkeypatch):
             assert found in FIXED_LEASES, (found, text)
         for t in re.findall(r"(?:ticket|wait) ([0-9a-f]{4})\b", text):
             assert t == "8fce", (t, text)
-        for pid in real_pids - {"4121", "4187", "4260"}:
+        for pid in real_pids - {"4121", "4187", "4203"}:
             assert not re.search(rf"pid {pid}\b", text), (pid, text)
+
+
+def _agent_pids(output):
+    """{agent: set of pids} from status lines of the form '<who> pid <N>'."""
+    found = {}
+    for who, pid in re.findall(r"(\S+) pid (\d+)", output):
+        if who != "owner":
+            found.setdefault(who, set()).add(pid)
+    return found
+
+
+def test_each_agent_shows_its_own_pid_in_status():
+    # In-process, every command shares one real pid; on a real box each
+    # agent's process has its own. The page must show them as distinct.
+    steps = {s.note_key: s for s in run_session()}
+    after = _agent_pids(steps["status-after"].output)
+    full = _agent_pids(steps["status-full"].output)
+    assert after == {"claude:sdxl": {"4203"}, "claude:eval": {"4187"}}
+    assert full == {"claude:bench": {"4121"}, "claude:eval": {"4187"}}
+    pids = {p for d in (full, after) for s in d.values() for p in s}
+    assert pids == {"4121", "4187", "4203"}
+    # the owner line still carries the owner pid as before
+    assert "owner pid 4121" in steps["first-grant"].output
+
+
+def test_agent_pids_are_identical_across_two_runs():
+    a = [s.output for s in run_session()]
+    b = [s.output for s in run_session()]
+    assert a == b
 
 
 def test_timestamps_do_not_depend_on_wall_clock_coincidence():

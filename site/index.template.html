@@ -84,9 +84,9 @@ $captions
     <h2>How it works</h2>
     <div class="how-grid">
       <ol class="how-steps">
-        <li><strong>A lease for each board.</strong> You ask for a number of chips. gozer grants a whole board, because the Tenstorrent runtime makes chips visible one board at a time: asking for one chip exposes both chips on its board. Each agent points the runtime at the chips it was given, so two agents on two boards stay out of each other's way.</li>
+        <li><strong>A lease for each board.</strong> You ask for a number of chips. gozer leases a whole board, because the Tenstorrent runtime's device visibility works at board level: a grant of one chip can expose both chips on its board. Each agent points the runtime at the chips it was given, so two agents on two boards stay out of each other's way.</li>
         <li><strong>A queue.</strong> If no board is free, you get a ticket and a place in line. Your agent can keep doing work that needs no chips. When it runs <code>gozer wait</code> with the ticket, gozer hands it the chips as soon as a board is released.</li>
-        <li><strong>A check that a chip is really in use.</strong> A lease record only says who asked. gozer also looks for an open device file under <code>/dev/tenstorrent</code>, which proves a process is using the chip. When a lease's process has ended and its device is closed, gozer clears the lease the next time someone asks for chips, so a crashed agent cannot hold a board forever.</li>
+        <li><strong>A check that a chip is really in use.</strong> A lease record only says who asked. gozer also looks for an open device file under <code>/dev/tenstorrent</code>, which proves a process is using the chip. When a lease's process has ended and its device is closed, gozer clears the lease the next time someone asks for chips. A lease taken by a bare <code>gozer acquire</code> has no process to watch, so gozer clears it only after 900 seconds (15 minutes) have passed since the grant with no device open. Either way, a crashed agent cannot hold a board forever.</li>
       </ol>
       <div class="figure">
 $diagram
@@ -102,7 +102,7 @@ $diagram
 <section id="install">
   <div class="wrap">
     <h2>Install</h2>
-    <p>gozer is a small Python program. It needs Python 3.10 or newer, and <code>tt-smi</code> to reset chips. The Debian package is tested on Debian 12, Ubuntu 22.04 and Ubuntu 24.04.</p>
+    <p>gozer is a small Python program. It needs Python 3.10 or newer, and <code>tt-smi</code> to reset chips. The Debian package is a single architecture-independent file for Debian and Ubuntu.</p>
     <ol class="install-steps">
       <li>Install the package from the <a href="https://github.com/tsingletaryTT/tt-gozer/releases/latest">latest release</a>.
 <pre class="term"><span class="prompt">$$ </span><span class="cmd">sudo apt install <span class="nw">./tt-gozer_${version}_all.deb</span></span></pre></li>
