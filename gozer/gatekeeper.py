@@ -121,6 +121,10 @@ class ChipState:
     lease: dict | None
     pids: list[int]
     overstayed: bool = False
+    # True for a non-detached lease whose owner pid is gone. With a holder it
+    # shows as HELD-FOREIGN; without a visible one it is STALE, and a process of
+    # another user (a container) may still be on the chip.
+    owner_dead: bool = False
 
 
 class Gatekeeper:
@@ -480,6 +484,10 @@ class Gatekeeper:
         fd_map = procfd.holders(self.proc_root, use_sudo=self.use_sudo)
         held = self.held_units()
         now = utcnow()
+        if reap:
+            # What this call reaped, for callers that report it (the recursive
+            # reap=False call below must not clear it).
+            self.last_reaped = []
 
         results: list[ChipState] = []
         # unit -> (lease, why) -- a dict rather than the previous list of
@@ -532,7 +540,10 @@ class Gatekeeper:
                         for p in pids)
                     state = "HELD" if owned else "HELD-FOREIGN"
             elif detached:
-                since = lease.get("since")
+                # `renewed_at` (gozer renew) restarts the window; both are
+                # same-format UTC strings, so the later one is the larger.
+                since = max(filter(None, (lease.get("since"),
+                                          lease.get("renewed_at"))), default=None)
                 # A lease missing `since` entirely is malformed data, not a
                 # legitimate fresh acquire; treat it as maximally old rather
                 # than trust it indefinitely.
@@ -549,7 +560,11 @@ class Gatekeeper:
                 state = "STALE"
                 reapable.setdefault(unit, (lease, "owning process is dead"))
 
-            results.append(ChipState(chip, state, lease, pids, overstayed))
+            owner_dead = (not detached
+                          and (owner is None
+                               or not procfd.pid_alive(owner, self.proc_root)))
+            results.append(ChipState(chip, state, lease, pids, overstayed,
+                                     owner_dead))
 
         if reap and reapable:
             # The reap runs under the mutex, and re-checks every lock before
@@ -583,6 +598,11 @@ class Gatekeeper:
                     history.log(self.history_root, "reaped", lease_id=lease_id,
                                who=lease.get("who"), chips=lease.get("chips", []),
                                duration_s=duration_s, why=why)
+                    if lease_id not in {r["lease_id"] for r in self.last_reaped}:
+                        self.last_reaped.append({
+                            "lease_id": lease_id, "who": lease.get("who"),
+                            "why": why, "owner_pid": lease.get("pid"),
+                            "owner_dead": not lease.get("detached")})
             # Re-derive so callers see FREE rather than the pre-reap STALE.
             return self.reconcile(reap=False)
 

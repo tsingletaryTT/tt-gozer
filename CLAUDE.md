@@ -528,3 +528,30 @@ no release) all red. Full suite 441. **Not proven on hardware:** a real `tt-smi 
 run through gozer, and whether it recovers a chip that stays all ones is unknown. On the live box
 `reset-all` was run only as a refusal check while `claude:coder-next` held chips 0 and 1, and reset
 nothing. Chip 2 had recovered by itself by then.
+
+## Renew heartbeat and dead-owner notes (2026-10-30, 0.3.8)
+
+Prompt: "yes do them please", for items 2 and 4 of the tt-orchard relay (items 3 and 5 left).
+
+* **`gozer renew <lease>` is a heartbeat.** `--expect` is now optional. Every renew stamps
+  `renewed_at` on the lease and on each unit's gate copy (reconcile reads the gate copy), and the
+  detached grace check measures from the later of `since` and `renewed_at`. Before this, `renew`
+  only moved the advisory deadline, so a bench that ran past 900 s without opening the device was
+  reaped and its chips granted to another agent. A renewal older than the window does not save a lease.
+* **`release` of a gone lease says why.** `Keymaster._missing_lease` reads `history.jsonl`: "reaped at
+  TS (why)", "already released at TS", or the old bare "not found" if nothing is recorded. Still
+  exit 13; `--json` adds `reaped_at` and `reaped_why`.
+* **Dead owner, device held.** `ChipState.owner_dead` (non-detached lease, owner pid gone).
+  `status` names the holder pids and their container (`procfd.container_id`, the first 12 hex of the
+  64-hex id in the cgroup path) on a HELD-FOREIGN chip, and `--json` has `owner_dead` and
+  `holder_containers`. `reconcile` lists each lease it reaped (`Gatekeeper.last_reaped`, also under
+  `reaped` in `--json`).
+* **What gozer cannot see.** A container run by another user is invisible to an unprivileged
+  `/proc/<pid>/fd` scan, so in the reported case (owner dead after a suspend, container still up)
+  the chip shows STALE, not HELD-FOREIGN. gozer cannot name that container. `status` and `reconcile`
+  now say the scan is blind to it and point at `gozer reconcile --sudo`. If passwordless sudo is
+  not there, the warning is all there is.
+
+TDD: `tests/test_renew_heartbeat.py` (9), `tests/test_orphan_holders.py` (11), red before; 4
+mutations (grace ignores renewed_at, owner_dead always False, no reconcile warning, renew skips the
+gate copy) all red. Full suite 461.

@@ -36,6 +36,13 @@ What to do about each, which the README does not say:
   Never granted: UMD would expand the grant to the dead chip. `gozer reset-all` repairs both.
   `reset-all` refuses while any chip is held, queued for or in use, and says which. It does not
   queue. Wait for the box to be free, or ask whoever holds it.
+- `HELD-FOREIGN` with "owner pid N is dead; device still held by pid P (container C)" — the
+  supervisor died but its work (often a container) is still on the chip. Do not release or
+  reset. Find the container, stop it, then release.
+- `STALE` with "owner pid N is dead; ... not visible" — the owner is gone and no process of
+  yours holds the chip, but another user's process (a container) cannot be seen by an
+  unprivileged scan. Run `gozer reconcile --sudo` before reusing the chip. A plain
+  `gozer reconcile` reaps the lease and warns about this.
 - `STALE` — `status` reports it but deliberately leaves it on disk (it never mutates state).
   Clear it with `gozer reconcile`.
 

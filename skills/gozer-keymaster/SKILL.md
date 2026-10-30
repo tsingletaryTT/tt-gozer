@@ -137,5 +137,11 @@ and keeps the queue moving.
   lease, so do not rely on a long `--expect` to buy time before you open the
   device.
 
+**If your work will not open the device for more than 15 minutes** (a long build, a CPU
+phase), keep the lease with a heartbeat: `gozer renew <lease>` restarts the grace window.
+Run it at least every 10 minutes until the device is open. Without it the lease is reaped
+and another agent can be granted your chips. A later `gozer release <lease>` then says the
+lease was reaped, and when.
+
 If something looks stuck or a chip is busy with no lease, switch to the
 `gozer-gatekeeper` skill.

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -112,6 +113,25 @@ def holders(proc_root: str = "/proc", use_sudo: bool = False,
 
 def pid_alive(pid: int, proc_root: str = "/proc") -> bool:
     return os.path.isdir(os.path.join(proc_root, str(pid)))
+
+
+_CONTAINER_ID_RE = re.compile(r"(?<![0-9a-f])([0-9a-f]{64})(?![0-9a-f])")
+
+
+def container_id(pid: int, proc_root: str = "/proc") -> str | None:
+    """The first 12 characters of the container id `pid` runs in, if any.
+
+    Docker, containerd and podman put the 64-hex container id in the cgroup
+    path (`docker-<id>.scope`, `/docker/<id>`, `libpod-<id>.scope`). Returns
+    None when the process is gone, the file cannot be read, or no id is there.
+    """
+    try:
+        with open(os.path.join(proc_root, str(pid), "cgroup")) as f:
+            text = f.read()
+    except OSError:
+        return None
+    m = _CONTAINER_ID_RE.search(text)
+    return m.group(1)[:12] if m else None
 
 
 def parent_pid(pid: int, proc_root: str = "/proc") -> int | None:

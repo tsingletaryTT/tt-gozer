@@ -88,6 +88,9 @@ class ReleaseResult:
     message: str
     units: list = field(default_factory=list)
     recovery: str = ""
+    # For "not-found": what history knows about the lease, if anything.
+    reaped_at: str | None = None
+    reaped_why: str | None = None
 
 
 @dataclass
@@ -389,8 +392,7 @@ class Keymaster:
         """
         lease = self.gk.read_lease(lease_id)
         if lease is None:
-            return ReleaseResult(False, "not-found",
-                                 f"lease {lease_id} not found")
+            return self._missing_lease(lease_id)
         units = lease.get("units", [])
         derived = [c for u in units for c in self.gk.chips_in_unit(u)]
         derived_bdfs = [c.bdf for c in derived]
@@ -540,6 +542,27 @@ class Keymaster:
                                  units=list(units), recovery=recovery)
         return ReleaseResult(True, "released",
                              "; ".join(m for m in messages if m))
+
+    def _missing_lease(self, lease_id: str) -> ReleaseResult:
+        """"not found", plus what history says happened to the lease: reaped
+        (and when and why), or already released. A lease with no record at all
+        keeps the bare message."""
+        events = [e for e in history.read(self.gk.history_root)
+                  if e.get("lease_id") == lease_id
+                  and e.get("event") in ("reaped", "released")]
+        last = events[-1] if events else None
+        if last is None:
+            return ReleaseResult(False, "not-found", f"lease {lease_id} not found")
+        if last["event"] == "reaped":
+            why = last.get("why") or "unknown reason"
+            return ReleaseResult(
+                False, "not-found",
+                f"lease {lease_id} not found: it was reaped at {last['ts']} "
+                f"({why}); nothing to release",
+                reaped_at=last["ts"], reaped_why=why)
+        return ReleaseResult(
+            False, "not-found",
+            f"lease {lease_id} not found: already released at {last['ts']}")
 
     @staticmethod
     def _recovery_commands(units, lease_id: str) -> str:

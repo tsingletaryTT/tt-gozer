@@ -117,11 +117,11 @@ $ gozer history -n 5
 | `wait <ticket>` [`--timeout 8m`] | block until a queued ticket is granted |
 | `queue` [`--json`] | list waiting requests |
 | `cancel <ticket>` | drop a queue ticket |
-| `renew <lease> --expect D` | extend a lease's advisory deadline |
+| `renew <lease>` [`--expect D`] | heartbeat: restarts a detached lease's 900 s grace window, so work that will not open the device for a while can keep its chips by renewing at least every 15 minutes. `--expect` also extends the advisory deadline |
 | `release` / `banish <lease>` [`--no-reset`] [`--force`] | give chips back (resets them); the reset opens every device on the box for about 42 s, so another board shows `BUSY-UNTRACKED` meanwhile. Do not preflight or acquire a board while another board's reset runs |
 | `reset <lease>` [`--force`] | reset the lease's chips in place and keep the lease; refuses while a device is open by one of your own processes (other users' processes are not visible, see "fd truth is same-user" below); the same cross-board window applies, so supervisors should not overlap resets |
 | `reset-all --who W` [`--reason R`] | host-wide `tt-smi -r all`, under a lease on every unit. It never queues: it refuses (exit 12, naming what is in use) unless the whole box is free, so it cannot reset anyone's work. It marks units clean only if every chip reads normally afterwards, and it is the reset to use for a chip that stays unreadable. Exit 20 means tt-smi succeeded but a chip still reads all ones |
-| `reconcile` [`--sudo`] | re-derive state from kernel truth, reaping what is genuinely dead |
+| `reconcile` [`--sudo`] | re-derive state from kernel truth, reaping what is genuinely dead. It names each lease it reaped, and warns when a reaped lease's owner pid was dead, because a container owned by another user is invisible to an unprivileged scan (`--sudo` checks theirs too) |
 | `adopt <target> --who W` | wrap a lease around untracked running work |
 | `env <lease>` | print export lines for a lease |
 | `run --chips N -- <command>` | acquire, run a command, always release. The release waits up to 10 s for the device to close (a fast-exiting command can leave a forked worker holding it for a moment) and refuses only if a process still holds it after that |

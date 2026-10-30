@@ -51,4 +51,10 @@ The keymaster must meet the gatekeeper for the coming of Gozer.
 # unit; refuses unless the whole box is free) and the DEGRADED state: a free
 # chip on a board missing a chip its card type should have is not grantable.
 # Exit 20 = reset-all ran and a chip still reads all ones.
-__version__ = "0.3.7"
+#
+# 0.3.8: `gozer renew <lease>` with no --expect is a heartbeat that restarts a
+# detached lease's grace window (Lease.renewed_at); `release` of a gone lease
+# says whether it was reaped (when, why) or already released; `status` and
+# `reconcile` say when a lease's owner pid is dead (holder and container named
+# when visible, a warning that other users' containers are invisible when not).
+__version__ = "0.3.8"

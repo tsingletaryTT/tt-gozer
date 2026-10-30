@@ -87,6 +87,10 @@ UNREADABLE_HINT = ("not responding (reads all ones), so it is not grantable; "
                    "while other leases are live")
 
 
+OTHER_USERS_HINT = ("processes of other users (a container) are not visible "
+                    "to this scan, so a container may still hold the chip; "
+                    "`gozer reconcile --sudo` checks theirs too")
+
 DEGRADED_HINT = ("its board partner is unreadable, so a grant would hand you "
                  "the dead chip too; run `gozer reset-all` when the whole box "
                  "is free")
@@ -138,12 +142,17 @@ def cmd_status(args) -> int:
              "board": s.chip.serial, "card": s.chip.card, "state": s.state,
              "who": (s.lease or {}).get("who"), "pid": (s.lease or {}).get("pid"),
              "reason": (s.lease or {}).get("reason"),
-             "pids_holding": s.pids, "overstayed": s.overstayed}
+             "pids_holding": s.pids, "overstayed": s.overstayed,
+             "owner_dead": s.owner_dead,
+             "holder_containers": {
+                 str(p): cid for p in s.pids
+                 if (cid := procfd.container_id(p, gk.proc_root))}}
             for s in states
         ] + [
             {"dev_index": c.dev_index, "bdf": c.bdf, "board": None,
              "card": c.card, "state": "UNREADABLE", "who": None, "pid": None,
-             "reason": None, "pids_holding": [], "overstayed": False}
+             "reason": None, "pids_holding": [], "overstayed": False,
+             "owner_dead": False, "holder_containers": {}}
             for c in gk.unreadable
         ],
         "queue": gk.queue_entries(),
@@ -169,6 +178,17 @@ def cmd_status(args) -> int:
             # status leaves a STALE lease on disk (see above) -- say what
             # clears it, since this is no longer done silently.
             extra += "  — stale; clear it with: gozer reconcile"
+            if s.owner_dead:
+                extra += (f"  — owner pid {s.lease.get('pid')} is dead; "
+                          f"{OTHER_USERS_HINT}")
+        if s.state == "HELD-FOREIGN" and s.owner_dead:
+            who_holds = ", ".join(
+                f"pid {p}" + (f" (container {cid})"
+                              if (cid := procfd.container_id(p, gk.proc_root))
+                              else "")
+                for p in s.pids)
+            extra += (f"  — owner pid {s.lease.get('pid')} is dead; "
+                      f"device still held by {who_holds}")
         if s.overstayed:
             extra += "  OVERSTAYED"
         lines.append(f"  chip {s.chip.dev_index}  {s.chip.bdf}  {s.state:<15}{extra}")
@@ -381,18 +401,31 @@ def cmd_cancel(args) -> int:
 
 
 def cmd_renew(args) -> int:
+    """Renew a lease: a sign of life, and optionally a new advisory deadline.
+
+    Every renew stamps `renewed_at`, which restarts a detached lease's grace
+    window (see Gatekeeper.reconcile), so a holder whose work will not open the
+    device for a while can keep its chips by renewing more often than every
+    DETACHED_GRACE_SECONDS. `--expect` also moves the advisory deadline.
+    """
     gk, _ = _make(args)
     lease = gk.read_lease(args.lease)
     if lease is None:
         _emit({"renewed": False}, f"lease {args.lease} not found", args.json)
         return EXIT_NO_LEASE
+    from gozer.gatekeeper import utcnow
     from gozer.keymaster import _deadline
-    lease["expect_done"] = _deadline(args.expect)
+    lease["renewed_at"] = utcnow()
+    if args.expect:
+        lease["expect_done"] = _deadline(args.expect)
     gk.write_lease(lease)
     for unit in lease.get("units", []):
         gk.update_unit_lease(unit, lease)
-    _emit({"renewed": True, "expect_done": lease["expect_done"]},
-          f"lease {args.lease} now expected done {lease['expect_done']}", args.json)
+    _emit({"renewed": True, "renewed_at": lease["renewed_at"],
+           "expect_done": lease.get("expect_done")},
+          f"lease {args.lease} renewed at {lease['renewed_at']}"
+          + (f", now expected done {lease['expect_done']}" if args.expect else ""),
+          args.json)
     return EXIT_OK
 
 
@@ -403,6 +436,9 @@ def cmd_release(args) -> int:
     if r.status == "reset-failed":
         payload["units"] = r.units
         payload["recovery"] = r.recovery
+    if r.reaped_at:
+        payload["reaped_at"] = r.reaped_at
+        payload["reaped_why"] = r.reaped_why
     _emit(payload, r.message, args.json)
     # The exit code comes from the structured status, never from the wording of
     # the message: it can carry embedded tt-smi output.
@@ -447,10 +483,15 @@ def cmd_reconcile(args) -> int:
     if args.sudo:
         gk.use_sudo = True
     states = gk.reconcile(reap=True)
+    reaped = getattr(gk, "last_reaped", [])
     payload = {"chips": [{"dev_index": s.chip.dev_index, "state": s.state}
                          for s in states],
-               "sudo": bool(args.sudo)}
+               "sudo": bool(args.sudo), "reaped": reaped}
     human = "\n".join(f"chip {s.chip.dev_index}  {s.state}" for s in states)
+    for r in reaped:
+        human += f"\nreaped lease {r['lease_id']} ({r['who']}): {r['why']}"
+        if r["owner_dead"] and not args.sudo:
+            human += f"\n  owner pid {r['owner_pid']} is dead; {OTHER_USERS_HINT}"
     if args.sudo and not procfd.sudo_available():
         human += ("\n! --sudo requested but passwordless sudo is unavailable; "
                   "results cover your own processes only")
@@ -631,9 +672,11 @@ def build_parser() -> argparse.ArgumentParser:
     c = add("cancel", cmd_cancel, "drop a queue ticket")
     c.add_argument("ticket")
 
-    r = add("renew", cmd_renew, "extend a lease's advisory deadline")
+    r = add("renew", cmd_renew, "heartbeat a lease (restarts a detached lease's grace window); --expect also extends its advisory deadline")
     r.add_argument("lease")
-    r.add_argument("--expect", required=True)
+    r.add_argument("--expect", default=None,
+                   help="also move the advisory deadline; without it renew is a "
+                        "heartbeat only")
 
     for name, aliases in (("release", ("banish",)),):
         rel = add(name, cmd_release, "give chips back (resets them)", aliases=aliases)
