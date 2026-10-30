@@ -122,7 +122,7 @@ The person using it tells the machine what to do and it happens, often in parall
   * `Standards-Version` current, a `Maintainer` and `Homepage`, and `Rules-Requires-Root: no`;
   * a man page for `gozer`, as lintian expects for a binary in `/usr/bin`;
   * the reconcile unit installed as a systemd *user* unit under `/usr/lib/systemd/user`,
-    never enabled by the package, and no maintainer scripts at all;
+    never enabled by the package, and no hand-written maintainer scripts (the only scripts are the ones dh_python3 generates to compile and remove Python bytecode, which enable nothing and touch no home directory; without them a non-root run cannot cache bytecode in `dist-packages`);
   * an `autopkgtest` smoke test in `debian/tests` that runs a lease against a fake box;
   * reproducible: file times come from `SOURCE_DATE_EPOCH`, taken from the changelog date;
   * CI builds with `dpkg-buildpackage -us -uc -b` in a container and runs `lintian` on the
