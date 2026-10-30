@@ -69,8 +69,14 @@ def _fake_box():
     saved = dict(os.environ)
     with tempfile.TemporaryDirectory(prefix="gozer-site-") as tmp:
         try:
+            # Gozer reads GOZER_* and XDG_STATE_HOME (history default);
+            # USER/LOGNAME/TT_VISIBLE_DEVICES never reach its output, but are
+            # scrubbed so nothing about the build machine can leak in.
             for k in [k for k in os.environ if k.startswith("GOZER_")]:
                 del os.environ[k]
+            for k in ("XDG_STATE_HOME", "TT_VISIBLE_DEVICES"):
+                os.environ.pop(k, None)
+            os.environ["USER"] = os.environ["LOGNAME"] = "ttuser"
             proc = os.path.join(tmp, "proc")
             os.makedirs(os.path.join(proc, "1", "fd"))
             _write(os.path.join(proc, "1", "comm"), "python")
@@ -120,14 +126,13 @@ class _Session:
         self.lease = _Mapper(_LEASE_FIXED)
         self.ticket = _Mapper(_TICKET_FIXED)
         self.pid = _Mapper(_PID_FIXED)
-        self.times = {}
+        # Index of the step being normalised. Every timestamp in step k's
+        # text becomes 16:<k>:00, so the result never depends on whether two
+        # real events happened to share a wall-clock second.
+        self.step = 0
 
-    def ts(self, value):
-        if value not in self.times:
-            # one minute apart, in order of first appearance
-            n = len(self.times)
-            self.times[value] = f"2026-10-26T16:{n:02d}:00Z"
-        return self.times[value]
+    def ts(self, _value):
+        return f"2026-10-26T16:{self.step:02d}:00Z"
 
 
 _ACTIVE = None
@@ -140,7 +145,8 @@ def normalise(text, _s=None):
     """
     s = _s or _ACTIVE or _Session()
     text = _TS_RE.sub(lambda m: s.ts(m.group(0)), text)
-    text = re.sub(r"(?<=lease )[0-9a-f]{6}\b", lambda m: s.lease(m.group(0)), text)
+    text = re.sub(r"\b(lease|release) ([0-9a-f]{6})\b",
+                  lambda m: m.group(1) + " " + s.lease(m.group(2)), text)
     # a ticket id appears as "ticket X" and as the argument of "gozer wait X"
     text = re.sub(r"\b(ticket|wait) ([0-9a-f]{4})\b",
                   lambda m: m.group(1) + " " + s.ticket(m.group(2)), text)
@@ -164,10 +170,14 @@ def run_session():
 def _script():
     steps = []
 
-    def step(argv, note_key):
+    def step(argv, note_key, display=None):
+        """Run argv; show `display` (default argv) as the typed command."""
+        _ACTIVE.step = len(steps)
         code, out = _run(argv)
+        shown = display if display is not None else argv
         steps.append(Step(
-            command=normalise("gozer " + " ".join(shlex.quote(a) for a in argv)),
+            command=normalise("gozer " + " ".join(
+                a if a == "$$" else shlex.quote(a) for a in shown)),
             output=normalise(out).rstrip("\n"), exit_code=code, note_key=note_key))
         return out
 
@@ -177,7 +187,10 @@ def _script():
         return m.group(1)
 
     out = step(["acquire", "--chips", "2", "--who", "claude:bench", "--reason",
-                "llama decode benchmark", "--owner-pid", "1"], "first-grant")
+                "llama decode benchmark", "--owner-pid", "1"], "first-grant",
+               display=["acquire", "--chips", "2", "--who", "claude:bench",
+                        "--reason", "llama decode benchmark",
+                        "--owner-pid", "$$"])
     first = find(r"lease ([0-9a-f]{6})", out)
     step(["acquire", "--chips", "2", "--who", "claude:eval", "--reason",
           "accuracy eval"], "second-grant")
