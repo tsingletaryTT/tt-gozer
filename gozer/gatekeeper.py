@@ -45,7 +45,8 @@ from gozer import history, procfd
 from gozer.jsonstore import (_atomic_write_json, _elapsed_seconds, _read_json,
                              utcnow)
 from gozer.queue import CLAIM_WINDOW_SECONDS, TicketQueue
-from gozer.topology import Board, Chip, all_chips, lease_grain, read_topology
+from gozer.topology import (Board, Chip, all_chips, lease_grain,
+                            read_topology_full, short_boards)
 
 DEFAULT_ROOT = "/tmp/tt-gozer"
 MUTEX_SUBDIR = "mutex"
@@ -420,11 +421,28 @@ class Gatekeeper:
 
     # ---- topology (cached; sysfs is cheap but we read it once per run) -----
 
+    def _topology(self):
+        if getattr(self, "_topo", None) is None:
+            self._topo = read_topology_full(self.sysfs_root)
+        return self._topo
+
     @property
     def boards(self) -> list[Board]:
-        if getattr(self, "_boards", None) is None:
-            self._boards = read_topology(self.sysfs_root)
-        return self._boards
+        return self._topology().boards
+
+    @property
+    def unreadable(self) -> list[Chip]:
+        """Chips that answer with all ones: set aside, never grantable."""
+        return self._topology().unreadable
+
+    def short_board_of(self, chip: Chip) -> tuple[int, int] | None:
+        """(readable, expected) if `chip` sits on a board missing a chip."""
+        return short_boards(self.boards).get(chip.serial)
+
+    def unreadable_chip(self, target: str) -> Chip | None:
+        """The unreadable chip a BDF or device index names, if it is one."""
+        return next((c for c in self.unreadable
+                     if target in (c.bdf, str(c.dev_index))), None)
 
     @property
     def grain(self) -> str:
@@ -477,8 +495,12 @@ class Gatekeeper:
             pids = fd_map.get(chip.dev_index, [])
 
             if lease is None:
-                results.append(ChipState(chip, "BUSY-UNTRACKED" if pids else "FREE",
-                                         None, pids))
+                # A free chip on a board that has lost its partner is
+                # DEGRADED: granting it would hand the tenant the dead chip too
+                # (UMD expands to the board). A tracked lease is left alone.
+                free_state = "DEGRADED" if self.short_board_of(chip) else "FREE"
+                results.append(ChipState(
+                    chip, "BUSY-UNTRACKED" if pids else free_state, None, pids))
                 continue
 
             owner = lease.get("pid")
@@ -613,8 +635,12 @@ class Gatekeeper:
             return [b.serial for b in self.boards]
         return [c.bdf for c in all_chips(self.boards)]
 
-    def free_units(self) -> list[str]:
-        """Units with no lease and no process holding any of their chips."""
+    def free_units(self, include_degraded: bool = False) -> list[str]:
+        """Units with no lease and no process holding any of their chips.
+
+        A unit with a DEGRADED chip is left out unless `include_degraded`,
+        which only `reset-all` passes: it is the one caller that must lease the
+        whole box, and it is there to repair exactly those units."""
         # reconcile() defaults to reap=True, and that default must stay. Do
         # not "simplify" this to reconcile(reap=False): a STALE lease (owning
         # pid dead, no fd open, chips genuinely idle) would then keep its
@@ -628,7 +654,8 @@ class Gatekeeper:
         free = []
         for unit in self.all_units():
             chips = self.chips_in_unit(unit)
-            if chips and all(by_chip[c.bdf].state == "FREE" for c in chips):
+            ok = ("FREE", "DEGRADED") if include_degraded else ("FREE",)
+            if chips and all(by_chip[c.bdf].state in ok for c in chips):
                 free.append(unit)
         return free
 
@@ -646,7 +673,8 @@ class Gatekeeper:
         return exact if exact in self.all_units() else None
 
     def allocate(self, min_chips: int, max_chips: int, exact: str | None = None,
-                 fresh: bool = False) -> list[str] | None:
+                 fresh: bool = False,
+                 include_degraded: bool = False) -> list[str] | None:
         """Choose unit keys satisfying the request, or None.
 
         Does not claim: it never calls claim_unit, so the returned keys are
@@ -663,7 +691,7 @@ class Gatekeeper:
         comment on free_units() -- but it does mean allocate() is not a pure
         read: it can delete another tenant's dead lease file.
         """
-        free = self.free_units()
+        free = self.free_units(include_degraded=include_degraded)
         if fresh:
             free = [u for u in free if self.is_clean(u)]
 

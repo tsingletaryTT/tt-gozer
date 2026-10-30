@@ -69,6 +69,41 @@ class ResetResult:
     message: str
 
 
+@dataclass
+class ReleaseResult:
+    """Outcome of Keymaster.release_result. `status` is one of: "released"
+    (torn down; reset ran and succeeded, or was not asked for), "reset-failed"
+    (torn down, but the reset ran and failed, so the units are NOT marked
+    clean), "not-found" (no such lease), "refused"
+    (nothing was done: a device is still open, or the units belong to another
+    lease) and "changed-hands" (the reset ran, then the units were found to
+    belong to another lease, whose lock was left alone).
+
+    `ok` is True when the lease was torn down, "released" or "reset-failed".
+    `units` and `recovery` are filled for "reset-failed" only; `recovery` is
+    the exact commands that put those units through a reset.
+    """
+    ok: bool
+    status: str
+    message: str
+    units: list = field(default_factory=list)
+    recovery: str = ""
+
+
+@dataclass
+class ResetAllResult:
+    """Outcome of Keymaster.reset_all. `status` is one of: "reset" (tt-smi
+    succeeded and every chip reads normally), "reset-incomplete" (tt-smi
+    succeeded but some chips still read all ones), "failed" (tt-smi failed) and
+    "busy" (something on the box is in use, so nothing was run). `unreadable`
+    lists the BDFs still unreadable afterwards."""
+    ok: bool
+    status: str
+    message: str
+    unreadable: list = field(default_factory=list)
+    lease_id: str | None = None
+
+
 # How long `gozer run`'s own release waits for a device to close before it
 # refuses. A command that exits fast (a compile error, a crash) can leave a
 # forked worker or a helper holding the device for a moment after the command
@@ -94,8 +129,16 @@ class Keymaster:
     def acquire(self, chips_spec: str, who: str, reason: str | None = None,
                 exact: str | None = None, fresh: bool = False,
                 expect: str | None = None, pid: int | None = None,
-                ticket: str | None = None, no_queue: bool = False):
+                ticket: str | None = None, no_queue: bool = False,
+                owner_pid: int | None = None,
+                include_degraded: bool = False):
         """Return a Grant, a queue-ticket dict, or None.
+
+        `owner_pid` is the supervisor pid the caller asked to hold the lease
+        (`gozer acquire --owner-pid`). It is written on the ticket, if one is
+        taken, so that `gozer wait` can replay it; the grant itself uses `pid`.
+        It is separate from `pid` because `gozer run` also passes a `pid`, and
+        its own pid is gone by the time the ticket is replayed.
 
         None means "nothing was available and you asked not to be queued"
         (`--no-queue`). That decision has to be made *here*, before the
@@ -146,6 +189,7 @@ class Keymaster:
             "min_chips": min_chips, "max_chips": max_chips,
             "exact": exact, "fresh": fresh,
             "reason": reason, "expect": expect,
+            "owner_pid": owner_pid,
         }
 
         with self.gk.critical_section():
@@ -156,7 +200,8 @@ class Keymaster:
             if not self.gk.may_claim(ticket):
                 return self._queue_or_refuse(ticket, request, no_queue)
 
-            units = self.gk.allocate(min_chips, max_chips, exact=exact, fresh=fresh)
+            units = self.gk.allocate(min_chips, max_chips, exact=exact, fresh=fresh,
+                                     include_degraded=include_degraded)
             if units is None:
                 return self._queue_or_refuse(ticket, request, no_queue)
 
@@ -300,6 +345,14 @@ class Keymaster:
 
     def release(self, lease_id: str, no_reset: bool = False,
                 force: bool = False, settle: float = 0.0) -> tuple[bool, str]:
+        """`release_result` as the (ok, message) pair older callers expect."""
+        r = self.release_result(lease_id, no_reset=no_reset, force=force,
+                                settle=settle)
+        return r.ok, r.message
+
+    def release_result(self, lease_id: str, no_reset: bool = False,
+                       force: bool = False,
+                       settle: float = 0.0) -> ReleaseResult:
         """Give the chips back: verify, reset, unlock, notify the queue.
 
         The ordering here is the whole point, and it is not obvious.
@@ -336,7 +389,8 @@ class Keymaster:
         """
         lease = self.gk.read_lease(lease_id)
         if lease is None:
-            return False, f"lease {lease_id} not found"
+            return ReleaseResult(False, "not-found",
+                                 f"lease {lease_id} not found")
         units = lease.get("units", [])
         derived = [c for u in units for c in self.gk.chips_in_unit(u)]
         derived_bdfs = [c.bdf for c in derived]
@@ -383,11 +437,11 @@ class Keymaster:
                        lease_id=lease_id, who=lease.get("who"),
                        reason="device still open", dev_indices=still_open,
                        waited_s=round(waited, 2))
-            return False, (
+            return ReleaseResult(False, "refused", (
                 f"chips {still_open} still open by "
                 f"{sorted({p for d in still_open for p in fd_map[d]})}"
                 + (f" after waiting {waited:.1f} s" if waited else "")
-                + " -- let the work finish, or pass --force")
+                + " -- let the work finish, or pass --force"))
 
         # First revalidation: are these units still ours, right now, with
         # nobody able to claim them while we look?
@@ -400,12 +454,12 @@ class Keymaster:
                        lease_id=lease_id, who=lease.get("who"),
                        reason="units now belong to another lease",
                        foreign=foreign)
-            return False, (
+            return ReleaseResult(False, "refused", (
                 "refusing to release: " +
                 ", ".join(f"{unit} now belongs to lease {other}"
                           for unit, other in sorted(foreign.items())) +
                 f" -- lease {lease_id} was already reaped or released; "
-                "nothing was reset")
+                "nothing was reset"))
 
         reset_ran = False
         reset_ok = False
@@ -443,12 +497,12 @@ class Keymaster:
                            reason="units now belong to another lease "
                                   "(discovered after the reset)",
                            foreign=foreign)
-                return False, (
+                return ReleaseResult(False, "changed-hands", (
                     "; ".join(messages + [
                         "aborted before teardown: " +
                         ", ".join(f"{unit} now belongs to lease {other}"
                                   for unit, other in sorted(foreign.items())) +
-                        " -- leaving the new tenant's lock alone"]))
+                        " -- leaving the new tenant's lock alone"])))
 
             if reset_ok:
                 for unit in units:
@@ -472,7 +526,118 @@ class Keymaster:
                    who=lease.get("who"), chips=derived_bdfs,
                    duration_s=duration_s, reset_ran=reset_ran,
                    reset_ok=reset_ok if reset_ran else None)
-        return True, "; ".join(m for m in messages if m)
+        # A reset that failed, or was skipped because the units gave no chips,
+        # leaves the lease torn down and the silicon unreset. That is not a
+        # clean release, whatever the exit used to say: the units are not
+        # marked clean, so --fresh refuses them, and the caller is told how to
+        # put them through a reset.
+        needs_reset = reset_ran and not reset_ok
+        if needs_reset:
+            recovery = self._recovery_commands(units, lease_id)
+            messages.append("recover with: " + recovery)
+            return ReleaseResult(True, "reset-failed",
+                                 "; ".join(m for m in messages if m),
+                                 units=list(units), recovery=recovery)
+        return ReleaseResult(True, "released",
+                             "; ".join(m for m in messages if m))
+
+    @staticmethod
+    def _recovery_commands(units, lease_id: str) -> str:
+        """The acquire-then-release pair that resets units a release left
+        un-reset: a plain acquire grants them, and releasing that lease runs
+        the reset. See the gatekeeper skill's recovery recipe."""
+        return " ; ".join(
+            f"gozer acquire --exact {u} --who recovery "
+            f"--reason 'reset after failed release of {lease_id}' "
+            "&& gozer release <lease printed above>"
+            for u in units)
+
+    def reset_all(self, who: str, reason: str | None = None) -> ResetAllResult:
+        """A host-wide `tt-smi -r all`, under a lease on every unit.
+
+        The lease is what makes it safe: it is only granted when every chip is
+        free, so the reset cannot land on anyone's running work, and nobody can
+        be granted a chip while it runs. DEGRADED units are included, since
+        repairing them is the point. A chip that reads all ones is not in any
+        unit, so its device nodes are checked for open fds here instead.
+
+        It never queues. A caller that cannot get the whole box gets "busy"
+        and the reason, and nothing is run.
+
+        Afterwards the topology is read again. Units are marked clean only if
+        tt-smi succeeded, and never while their board is still short a chip.
+        The lease is released without a second reset.
+        """
+        fd_map = procfd.holders(self.gk.proc_root)
+        dead_before = list(self.gk.unreadable)
+        dead_open = {c.dev_index: sorted(fd_map[c.dev_index])
+                     for c in dead_before if fd_map.get(c.dev_index)}
+        if dead_open:
+            return ResetAllResult(False, "busy", (
+                "not resetting: an unreadable chip's device is open by "
+                + ", ".join(f"chip {d} pid {p}" for d, p in sorted(dead_open.items()))))
+
+        grant = self.acquire("all", who=who,
+                             reason=reason or "reset-all (host-wide reset)",
+                             pid=os.getpid(), no_queue=True,
+                             include_degraded=True)
+        if not isinstance(grant, Grant):
+            blockers = [f"chip {s.chip.dev_index} {s.state}"
+                        + (f" ({s.lease['who']} pid {s.lease['pid']})"
+                           if s.lease else "")
+                        for s in self.gk.reconcile(reap=False)
+                        if s.state not in ("FREE", "DEGRADED")]
+            history.log(self.gk.history_root, "refused", action="reset_all",
+                       who=who, reason="box not free", blockers=blockers)
+            return ResetAllResult(False, "busy", (
+                "not resetting: the whole box must be free. "
+                + ("; ".join(blockers) if blockers
+                   else "other requests are queued ahead")))
+
+        ok, out = reset_mod.reset_all(runner=self.reset_runner)
+
+        # Re-read sysfs: a chip that came back changes which chips make up each
+        # board, and the lease record still lists the chips from before.
+        self.gk._topo = None
+        try:
+            dead_after = [c.bdf for c in self.gk.unreadable]
+            all_dead = False
+        except Exception:  # noqa: BLE001 - every chip still dead: no topology
+            dead_after, all_dead = [c.bdf for c in dead_before], True
+
+        if not all_dead:
+            lease = self.gk.read_lease(grant.lease_id)
+            if lease is not None:
+                chips = sorted((c for u in lease["units"]
+                                for c in self.gk.chips_in_unit(u)),
+                               key=lambda c: c.dev_index)
+                lease["chips"] = [c.bdf for c in chips]
+                lease["dev_indices"] = [c.dev_index for c in chips]
+                self.gk.write_lease(lease)
+            if ok:
+                for unit in grant.units:
+                    chips = self.gk.chips_in_unit(unit)
+                    if chips and not any(self.gk.short_board_of(c) for c in chips):
+                        self.gk.mark_clean(unit)
+
+        released = self.release_result(grant.lease_id, no_reset=True)
+
+        if not ok:
+            status, message = "failed", f"tt-smi -r all failed: {out}"
+        elif dead_after:
+            status = "reset-incomplete"
+            message = (f"reset ran, but {', '.join(dead_after)} still read all "
+                       "ones. gozer has no further reset to try: a human must "
+                       "power-cycle the box or reseat the card")
+        else:
+            status, message = "reset", "reset ok: every chip reads normally"
+        if not released.ok:
+            message += f"; release: {released.message}"
+        history.log(self.gk.history_root, "reset_all", lease_id=grant.lease_id,
+                   who=who, status=status, unreadable=dead_after,
+                   chips=grant.bdfs)
+        return ResetAllResult(status == "reset", status, message,
+                              unreadable=dead_after, lease_id=grant.lease_id)
 
     def reset(self, lease_id: str, force: bool = False) -> ResetResult:
         """Reset a held lease's chips and keep the lease.

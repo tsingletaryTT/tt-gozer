@@ -15,9 +15,9 @@ import sys
 import time
 
 from gozer import __version__, history, procfd, report
-from gozer.gatekeeper import Gatekeeper
+from gozer.gatekeeper import DETACHED_GRACE_SECONDS, Gatekeeper
 from gozer.keymaster import Grant, Keymaster, TicketNotFound, parse_duration
-from gozer.topology import TopologyError
+from gozer.topology import TopologyError, all_chips
 
 EXIT_OK = 0
 EXIT_QUEUED = 10
@@ -53,6 +53,14 @@ EXIT_RESET_FAILED = 17
 # unit. The reset may have hit chips that were no longer ours. Distinct from 15,
 # which means nothing was done.
 EXIT_RESET_CHANGED_HANDS = 18
+# `gozer release` tore the lease down, but its reset failed: the lease is gone,
+# the units are not marked clean (so --fresh refuses them) and the chips may be
+# unreadable until reset. The output carries the recovery commands. Distinct
+# from 0 (clean), 13 (no such lease) and 15 (nothing was done).
+EXIT_RELEASE_RESET_FAILED = 19
+# `gozer reset-all` ran tt-smi and it succeeded, but some chips still read all
+# ones. gozer has nothing further to try; the output says what a human must do.
+EXIT_RESET_ALL_INCOMPLETE = 20
 # Conventional 128 + SIGINT, for `gozer run` interrupted by a signal.
 EXIT_INTERRUPTED = 130
 
@@ -72,6 +80,40 @@ def _emit(payload: dict, human: str, as_json: bool) -> None:
 
 
 # ---- commands -------------------------------------------------------------
+
+UNREADABLE_HINT = ("not responding (reads all ones), so it is not grantable; "
+                   "a failed `gozer release` reset leaves this. A human must "
+                   "reset or power-cycle it: do not run tt-smi -r by hand "
+                   "while other leases are live")
+
+
+DEGRADED_HINT = ("its board partner is unreadable, so a grant would hand you "
+                 "the dead chip too; run `gozer reset-all` when the whole box "
+                 "is free")
+
+
+def _refuse_unreadable_exact(gk, exact, as_json) -> int | None:
+    """Exit code if --exact names an unreadable or degraded chip, else None.
+    Without this the request would match no free unit and sit in the queue for
+    good."""
+    if not exact:
+        return None
+    chip = gk.unreadable_chip(exact)
+    if chip is not None:
+        msg = (f"chip {chip.dev_index} ({chip.bdf}) is unreadable: "
+               f"{UNREADABLE_HINT}")
+    else:
+        chip = next((c for c in all_chips(gk.boards)
+                     if exact in (c.bdf, str(c.dev_index))
+                     and gk.short_board_of(c)), None)
+        if chip is None:
+            return None
+        have, want = gk.short_board_of(chip)
+        msg = (f"chip {chip.dev_index} ({chip.bdf}) is degraded: its board has "
+               f"{have} of {want} chips readable; {DEGRADED_HINT}")
+    _emit({"granted": False, "error": msg}, f"gozer: {msg}", as_json)
+    return EXIT_UNAVAILABLE
+
 
 def cmd_status(args) -> int:
     gk, _ = _make(args)
@@ -98,10 +140,17 @@ def cmd_status(args) -> int:
              "reason": (s.lease or {}).get("reason"),
              "pids_holding": s.pids, "overstayed": s.overstayed}
             for s in states
+        ] + [
+            {"dev_index": c.dev_index, "bdf": c.bdf, "board": None,
+             "card": c.card, "state": "UNREADABLE", "who": None, "pid": None,
+             "reason": None, "pids_holding": [], "overstayed": False}
+            for c in gk.unreadable
         ],
         "queue": gk.queue_entries(),
     }
-    lines = [f"grain: {gk.grain}   ({len(gk.boards)} boards, {len(states)} chips)"]
+    payload["chips"].sort(key=lambda c: c["dev_index"])
+    lines = [f"grain: {gk.grain}   ({len(gk.boards)} boards, "
+             f"{len(states) + len(gk.unreadable)} chips)"]
     current_board = None
     for s in states:
         if s.chip.serial != current_board:
@@ -112,6 +161,10 @@ def cmd_status(args) -> int:
         extra = f"  {who} pid {pid}" if who else ""
         if s.state == "BUSY-UNTRACKED":
             extra = f"  pid {','.join(map(str, s.pids))} — no lease; try: gozer adopt"
+        elif s.state == "DEGRADED":
+            have, want = gk.short_board_of(s.chip)
+            extra = (f"  board has {have} of {want} chips readable -- "
+                     f"{DEGRADED_HINT}")
         elif s.state == "STALE":
             # status leaves a STALE lease on disk (see above) -- say what
             # clears it, since this is no longer done silently.
@@ -119,6 +172,11 @@ def cmd_status(args) -> int:
         if s.overstayed:
             extra += "  OVERSTAYED"
         lines.append(f"  chip {s.chip.dev_index}  {s.chip.bdf}  {s.state:<15}{extra}")
+    if gk.unreadable:
+        lines.append("unreadable (not grantable):")
+        for c in gk.unreadable:
+            lines.append(f"  chip {c.dev_index}  {c.bdf}  UNREADABLE")
+        lines.append(f"  {UNREADABLE_HINT}")
     q = gk.queue_entries()
     if q:
         lines.append("queue:")
@@ -139,6 +197,8 @@ def cmd_topology(args) -> int:
                         "asic_id": c.asic_id} for c in b.chips]}
             for b in gk.boards
         ],
+        "unreadable": [{"dev_index": c.dev_index, "bdf": c.bdf}
+                       for c in gk.unreadable],
     }
     lines = [f"grain: {gk.grain}"]
     for b in gk.boards:
@@ -169,6 +229,9 @@ def _render_grant(grant: Grant, gk, owner_pid: int | None = None) -> str:
 
 def cmd_acquire(args) -> int:
     gk, km = _make(args)
+    refused = _refuse_unreadable_exact(gk, args.exact, args.json)
+    if refused is not None:
+        return refused
     # --owner-pid lets a *supervisor* (tt-station-agentd, holding a lease on
     # behalf of a container it manages) claim non-detached semantics: the
     # lease is judged by pid_alive(owner_pid) instead of the detached grace
@@ -205,7 +268,7 @@ def cmd_acquire(args) -> int:
     # process-death detection instead.
     result = km.acquire(args.chips, who=args.who, reason=args.reason,
                         exact=args.exact, fresh=args.fresh, expect=args.expect,
-                        pid=args.owner_pid,
+                        pid=args.owner_pid, owner_pid=args.owner_pid,
                         ticket=args.ticket, no_queue=args.no_queue)
     if isinstance(result, Grant):
         payload = {
@@ -260,16 +323,33 @@ def cmd_wait(args) -> int:
             # queued agent something it did not ask for. `chips_spec` is
             # absent on tickets written by an older gozer still sitting in
             # the queue, hence the min-max fallback.
+            # --owner-pid is replayed too: the supervisor was named when the
+            # ticket was taken, and it is that pid (not this waiter, which
+            # exits) the lease must live and die with. It is checked again
+            # now, since it may have died while queued. A dead pid is never
+            # used: the lease would be reapable the instant it was created.
+            # The grant falls back to a detached lease and says so.
+            owner = entry.get("owner_pid")
+            note = None
+            if owner is not None and not procfd.pid_alive(owner, gk.proc_root):
+                note = (f"note: --owner-pid {owner} was not alive at grant "
+                        f"time, so this lease is detached (reaped after "
+                        f"{DETACHED_GRACE_SECONDS} s without an open device)")
+                owner = None
             result = km.acquire(
                 entry.get("chips_spec")
                 or f"{entry['min_chips']}-{entry['max_chips']}",
                 who=entry["who"], reason=entry.get("reason"),
                 exact=entry.get("exact"), fresh=entry.get("fresh", False),
-                expect=entry.get("expect"), ticket=args.ticket)
+                expect=entry.get("expect"), ticket=args.ticket, pid=owner)
             if isinstance(result, Grant):
                 payload = {"granted": True, "lease_id": result.lease_id,
-                           "chips": result.bdfs, "env": km.env_for(result)}
-                _emit(payload, _render_grant(result, gk), args.json)
+                           "chips": result.bdfs, "env": km.env_for(result),
+                           "owner_pid": owner}
+                human = _render_grant(result, gk, owner_pid=owner)
+                if note:
+                    human += "\n" + note
+                _emit(payload, human, args.json)
                 return EXIT_OK
         time.sleep(1)
 
@@ -318,13 +398,21 @@ def cmd_renew(args) -> int:
 
 def cmd_release(args) -> int:
     _, km = _make(args)
-    ok, msg = km.release(args.lease, no_reset=args.no_reset, force=args.force)
-    _emit({"released": ok, "message": msg}, msg, args.json)
-    if ok:
+    r = km.release_result(args.lease, no_reset=args.no_reset, force=args.force)
+    payload = {"released": r.ok, "status": r.status, "message": r.message}
+    if r.status == "reset-failed":
+        payload["units"] = r.units
+        payload["recovery"] = r.recovery
+    _emit(payload, r.message, args.json)
+    # The exit code comes from the structured status, never from the wording of
+    # the message: it can carry embedded tt-smi output.
+    if r.status == "released":
         return EXIT_OK
-    # Two failure shapes, two codes: there is no such lease (13), or the
-    # release was refused and nothing was done (15).
-    return EXIT_NO_LEASE if "not found" in msg else EXIT_RELEASE_REFUSED
+    if r.status == "reset-failed":
+        return EXIT_RELEASE_RESET_FAILED
+    if r.status == "not-found":
+        return EXIT_NO_LEASE
+    return EXIT_RELEASE_REFUSED     # "refused" and "changed-hands": nothing torn down
 
 
 def cmd_reset(args) -> int:
@@ -341,6 +429,17 @@ def cmd_reset(args) -> int:
     if result.status == "changed-hands":
         return EXIT_RESET_CHANGED_HANDS
     return EXIT_RELEASE_REFUSED     # "refused": nothing was done
+
+
+def cmd_reset_all(args) -> int:
+    _, km = _make(args)
+    r = km.reset_all(args.who, args.reason)
+    _emit({"reset": r.ok, "status": r.status, "message": r.message,
+           "unreadable": r.unreadable, "lease_id": r.lease_id},
+          r.message, args.json)
+    return {"reset": EXIT_OK, "busy": EXIT_UNAVAILABLE,
+            "failed": EXIT_RESET_FAILED,
+            "reset-incomplete": EXIT_RESET_ALL_INCOMPLETE}[r.status]
 
 
 def cmd_reconcile(args) -> int:
@@ -461,7 +560,10 @@ def _repo_root() -> str:
 
 
 def cmd_run(args) -> int:
-    _, km = _make(args)
+    gk, km = _make(args)
+    refused = _refuse_unreadable_exact(gk, args.exact, False)
+    if refused is not None:
+        return refused
     if not args.command:
         print("nothing to run: put the command after --", file=sys.stderr)
         return EXIT_UNAVAILABLE
@@ -545,6 +647,12 @@ def build_parser() -> argparse.ArgumentParser:
     rs.add_argument("lease")
     rs.add_argument("--force", action="store_true",
                     help="reset even if a device is still open")
+
+    ra = add("reset-all", cmd_reset_all,
+             "host-wide tt-smi -r all, under a lease on the whole box; refuses "
+             "unless every chip is free")
+    ra.add_argument("--who", required=True)
+    ra.add_argument("--reason", default=None)
 
     rec = add("reconcile", cmd_reconcile, "re-derive state from kernel truth")
     rec.add_argument("--sudo", action="store_true",

@@ -33,4 +33,22 @@ The keymaster must meet the gatekeeper for the coming of Gozer.
 # could leave a forked worker holding the device for a second or two; the
 # release refused, left a stale lease and skipped the reset (tt-orchard issue
 # 117). `gozer release` by hand is unchanged.
-__version__ = "0.3.4"
+#
+# 0.3.5: a queued `acquire --owner-pid N` keeps N through `gozer wait` (the
+# ticket records it; a dead pid falls back to a detached grant with a note).
+# `release` returns a structured result: a reset that failed now exits 19
+# instead of 0, prints the recovery commands, and `cmd_release` no longer picks
+# its exit code by matching "not found" in the message text. Exit 0 -> 19 is a
+# contract change for anything that treated a failed-reset release as success
+# (both reported by tt-orchard).
+#
+# 0.3.6: a chip whose tt_serial reads all ones (it has fallen off the bus) is
+# `UNREADABLE` in `status`/`topology`, kept out of boards and the lease grain,
+# and refused by `--exact`. Before, it passed the empty-serial check, formed a
+# board of its own and showed as FREE (tt-orchard, 2026-10-30).
+#
+# 0.3.7: `gozer reset-all` (a host-wide `tt-smi -r all` under a lease on every
+# unit; refuses unless the whole box is free) and the DEGRADED state: a free
+# chip on a board missing a chip its card type should have is not grantable.
+# Exit 20 = reset-all ran and a chip still reads all ones.
+__version__ = "0.3.7"

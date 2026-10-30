@@ -51,3 +51,26 @@ def reset_chips(bdfs: list[str], cmd: str | None = None,
         return False, f"{' '.join(argv)}: {e}"
     output = (getattr(proc, "stdout", "") or "") + (getattr(proc, "stderr", "") or "")
     return proc.returncode == 0, output.strip()
+
+
+def reset_all_command(cmd: str | None = None) -> list[str]:
+    """`tt-smi -r all`: every device on the host, named explicitly.
+
+    Only `gozer reset-all` uses this, and only after it holds a lease on every
+    unit. It exists for a chip that stays unreadable after a per-chip reset has
+    failed: such a chip may not be addressable by BDF at all, and tt-smi's own
+    "all" path is the one that does not need it to be.
+    """
+    exe = cmd or os.environ.get("GOZER_RESET_CMD") or DEFAULT_RESET_CMD
+    return [exe, "-r", "all"]
+
+
+def reset_all(cmd: str | None = None, runner=subprocess.run) -> tuple[bool, str]:
+    """Run the host-wide reset. Same contract as `reset_chips`."""
+    argv = reset_all_command(cmd)
+    try:
+        proc = runner(argv, capture_output=True, text=True, timeout=600)
+    except Exception as e:  # noqa: BLE001
+        return False, f"{' '.join(argv)}: {e}"
+    output = (getattr(proc, "stdout", "") or "") + (getattr(proc, "stderr", "") or "")
+    return proc.returncode == 0, output.strip()

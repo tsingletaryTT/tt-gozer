@@ -438,3 +438,93 @@ field), all red. Full suite 400 passed.
 Not done: a holder that stays longer than 10 s is still a refusal that leaves a stale lease
 (the caller can run `gozer reconcile` and the next lease resets). Whether a child of a
 compile step is what held the device in the original run was not shown.
+
+## Queued owner pid and release reasons (2026-10-30, 0.3.5)
+
+Prompt: tt-orchard-cf relayed gozer bugs from about a dozen agents sharing a board. This pass
+takes the first two of the six (branch `owner-pid-through-wait-and-release-reasons`); the user
+chose them from a triage.
+
+1. `acquire --owner-pid N` that queued, then `gozer wait`, granted the lease with no owner pid
+   (the code comment on `cmd_wait` said this was deliberate, and the open item in this file noted
+   `wait` could support it). When the waiter exited, the lease went stale and the chips looked
+   free mid-run. The ticket now records `owner_pid` (a new `Keymaster.acquire(owner_pid=)`
+   argument, separate from `pid` because `gozer run` also passes a `pid` that is dead by replay
+   time) and `wait` replays it after checking it is still alive. A dead pid gives a detached
+   grant and a note naming it, so a supervisor that died in the queue does not strand the ticket
+   or mint a lease reapable at once.
+2. A `release` whose reset failed exited 0 with the failure in prose; the lease was gone and the
+   chip unreset. `Keymaster.release_result` returns `ReleaseResult(ok, status, message, units,
+   recovery)`; `release` keeps the old `(ok, message)` pair. `cmd_release` picks its exit code
+   from `status` (this removes the `"not found" in msg` substring match listed under Known
+   limitations). New exit 19 = torn down, reset failed, with the acquire-then-release recovery
+   per unit in the output and in `--json`. `--fresh` already refused such a unit (it is not
+   marked clean); a test now pins that.
+
+Not done from the relay: `renew` as a heartbeat for detached leases and a "reaped at ..." release
+message (item 2 of the relay), a built-in holder, a "owner dead, device still held" note, and the
+intermittent `unreadable tt_serial` (exit 14), whose cause is unproven: the guess is a sysfs read
+racing a reset, and it needs dates from the orchard logs.
+
+TDD: `tests/test_queued_owner_pid.py`, `tests/test_release_reasons.py` (both red before the
+change). Exit 0 -> 19 is a breaking contract change; the README table says so. Full suite 411.
+
+## Unreadable chips are not FREE (2026-10-30, 0.3.6)
+
+Prompt: tt-orchard-cf reported a live repro on this box. After a hung run was killed, chip 2
+(`0000:03:00.0`) read `0xffffffff` and two resets (`gozer release`, then acquire `--exact` and
+release) failed. `gozer status` showed `board FFFFFFFFFFFFFFFF (unknown)` with chip 2 `FREE`.
+
+Cause: a chip off the bus answers every read with all ones, so `tt_serial` is
+`FFFFFFFFFFFFFFFF`. That is not empty, so the empty-serial guard in `read_topology` passed it, it
+became a one-chip board, and a one-chip or `--fresh` request could be granted it. Checked read-only
+against the live sysfs before changing anything.
+
+Fix: `topology.read_topology_full` returns `Topology(boards, unreadable)`; an all-ones serial
+(`is_dead_serial`, any case, optional `0x`) is set aside and takes no part in boards or the grain.
+`read_topology` still returns boards only. `status` and `topology` list the chip as `UNREADABLE`
+(JSON state `UNREADABLE`), and `acquire`/`run --exact` on it exits 12 with a message instead of
+queueing for ever. If every chip is all ones the topology is an error, as an empty serial still is.
+`tests/test_unreadable_chip.py`, 14 tests, red before. Full suite 425.
+
+Decided with the user: exclude the chip and keep the other boards usable, rather than failing the
+whole topology (exit 14).
+
+Not done, and worth knowing:
+* The dead chip's board partner shows as a board of one and stays `FREE`. gozer cannot tell from
+  sysfs that it has a partner, and UMD would expand a grant of it to the dead chip. `status` says so;
+  a fix would need the expected chips per board from the card type.
+* No board-level reset path. `release`/`reset` are per-ASIC `tt-smi -r <bdf>`, which is what failed.
+  Whether gozer should own a board-level reset is an open design question. Today recovery for a
+  chip that stays all ones is a human: reset or power cycle.
+* The empty/missing `tt_serial` case (exit 14, the intermittent one from the relay) is unchanged.
+
+## `reset-all` and DEGRADED boards (2026-10-30, 0.3.7)
+
+Prompt: after the UNREADABLE work, "we could make a wrapper to reset a board, knowing p300c
+boards are 2 chips ... in any case run tt-smi -r on the host so we reset everything, it's usually
+the best choice if everything is free." Asked to build `reset-all` and the partner check.
+
+* **Partner check.** `topology.EXPECTED_CHIPS_PER_BOARD` (p300a/b/c = 2, p150a/b/c = 1) and
+  `short_boards()`. A free chip on a board with fewer readable chips than that is `DEGRADED`, not
+  `FREE`: `free_units` leaves it out, `status` says "1 of 2 chips readable", and `--exact` on it
+  exits 12 rather than queueing for ever. An unknown card type has no expectation, so is never
+  short. A held chip keeps its lease state.
+* **`gozer reset-all --who W [--reason R]`.** `Keymaster.reset_all` leases every unit with
+  `acquire("all", no_queue=True, include_degraded=True)` using its own pid, runs
+  `tt-smi -r all` (the CLI documents "omit targets or use 'all'"), re-reads sysfs, rewrites the
+  lease's chip list from the new topology so release does not log a record mismatch, marks a unit
+  clean only if tt-smi succeeded and its board is no longer short, then releases with
+  `no_reset=True`. It never queues: if anything is held or in use it returns `busy` (exit 12)
+  naming the blockers and runs nothing. An unreadable chip is in no unit, so its device node is
+  checked for open fds separately. Statuses: `reset` 0, `busy` 12, `failed` 17,
+  `reset-incomplete` 20 (tt-smi ok, a chip still all ones). Logged as a `reset_all` history event.
+* The per-board wrapper was not built: the failure that started this was a per-ASIC reset, and
+  `reset-all` is the path that does not depend on addressing a dead chip by BDF.
+
+Tested in this session: 16 tests (`tests/test_degraded_board.py`, `tests/test_reset_all.py`); 5
+mutations (no include_degraded, mark clean while short, partner shown FREE, no dead-chip fd check,
+no release) all red. Full suite 441. **Not proven on hardware:** a real `tt-smi -r all` has not been
+run through gozer, and whether it recovers a chip that stays all ones is unknown. On the live box
+`reset-all` was run only as a refusal check while `claude:coder-next` held chips 0 and 1, and reset
+nothing. Chip 2 had recovered by itself by then.

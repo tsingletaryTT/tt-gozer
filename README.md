@@ -120,6 +120,7 @@ $ gozer history -n 5
 | `renew <lease> --expect D` | extend a lease's advisory deadline |
 | `release` / `banish <lease>` [`--no-reset`] [`--force`] | give chips back (resets them); the reset opens every device on the box for about 42 s, so another board shows `BUSY-UNTRACKED` meanwhile. Do not preflight or acquire a board while another board's reset runs |
 | `reset <lease>` [`--force`] | reset the lease's chips in place and keep the lease; refuses while a device is open by one of your own processes (other users' processes are not visible, see "fd truth is same-user" below); the same cross-board window applies, so supervisors should not overlap resets |
+| `reset-all --who W` [`--reason R`] | host-wide `tt-smi -r all`, under a lease on every unit. It never queues: it refuses (exit 12, naming what is in use) unless the whole box is free, so it cannot reset anyone's work. It marks units clean only if every chip reads normally afterwards, and it is the reset to use for a chip that stays unreadable. Exit 20 means tt-smi succeeded but a chip still reads all ones |
 | `reconcile` [`--sudo`] | re-derive state from kernel truth, reaping what is genuinely dead |
 | `adopt <target> --who W` | wrap a lease around untracked running work |
 | `env <lease>` | print export lines for a lease |
@@ -167,6 +168,8 @@ carry the outcome, so no output parsing is required:
 | `16` | the allocator mutex is stuck; the message names the path to clear |
 | `17` | `reset` ran tt-smi and it failed; the lease is still held |
 | `18` | `reset` ran, and afterwards the lease was gone or another lease held its chips; the reset may have hit chips that were no longer yours |
+| `19` | `release` tore the lease down but its reset failed; the units are not marked clean (so `--fresh` refuses them) and the chips may be unreadable until reset. The output, and `recovery` in `--json`, give the commands. Before 0.3.5 this exited `0` |
+| `20` | `reset-all` ran tt-smi and it succeeded, but some chips still read all ones; gozer has nothing further to try, so a human must power-cycle the box or reseat the card |
 | `130` | `gozer run` was interrupted by a signal (128 + SIGINT); the lease was still released |
 
 Waiting is designed around agents: `acquire` never blocks, so an agent gets a ticket and can
@@ -232,6 +235,8 @@ Six states, derived from comparing the lease files against the kernel:
 | ✓ | none, owner gone (or, for a detached lease, its 900s grace window elapsed) | `STALE` | reaped by `acquire` or `reconcile` — `status` reports it but leaves it on disk; clear it with `gozer reconcile` |
 | ✗ | yes | `BUSY-UNTRACKED` | untracked work — never handed out |
 | ✗ | none | `FREE` | allocatable |
+| ✗ | none | `DEGRADED` | free, but its board has fewer readable chips than its card type has (a p300 with one chip reading all ones); never handed out, because UMD would expand a grant to the dead chip |
+| n/a | n/a | `UNREADABLE` | the chip's `tt_serial` reads all ones (it has fallen off the bus); never handed out, and `--exact` on it is refused |
 
 A *detached* lease is one with no supervised process — a bare `gozer acquire` rather than
 `gozer run` — so there is no pid whose death reconciliation can watch for. Such a lease is
@@ -250,6 +255,10 @@ unprivileged gozer can never see, so a detached lease taken on its behalf would 
 `--owner-pid` and the lease is judged by that pid's liveness instead, exactly like `gozer
 run`'s: `CLAIMED` for as long as the supervisor lives, no fd or grace window needed. A
 non-positive pid, or one that is not alive right now, is refused rather than accepted.
+If the `acquire` queues, the pid is kept on the ticket and `gozer wait` grants the lease
+under it, so the lease still lives and dies with the supervisor and not with the waiter. The
+pid is checked again at grant time; if it died while queued, the grant is detached (with a
+note saying so), because a lease owned by a dead pid would be reaped at once.
 Pass the supervisor's own pid, not a shell's or pid 1, because every live descendant of the
 owner counts as the owner's own. A process that was re-parented to init after its parent
 exited does not. For owner pid 1 only the pid itself and its process-group

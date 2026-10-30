@@ -56,11 +56,62 @@ def _bdf_from_device_link(base: str) -> str:
         return ""
 
 
+@dataclass(frozen=True)
+class Topology:
+    """The readable boards, plus the chips set aside because they cannot be
+    placed on a board."""
+    boards: list[Board]
+    unreadable: list[Chip] = field(default_factory=list)
+
+
+# How many chips each board type carries. Used only to notice a board that has
+# lost a chip: sysfs cannot say that a lone chip once had a partner, and UMD
+# would expand a grant of it to the missing one. A card type not listed here
+# has no expectation, so it is never called short.
+EXPECTED_CHIPS_PER_BOARD = {
+    "p300a": 2, "p300b": 2, "p300c": 2,
+    "p150a": 1, "p150b": 1, "p150c": 1,
+}
+
+
+def short_boards(boards: list[Board]) -> dict[str, tuple[int, int]]:
+    """Boards with fewer readable chips than their card type has:
+    serial -> (readable, expected)."""
+    out = {}
+    for b in boards:
+        want = EXPECTED_CHIPS_PER_BOARD.get(b.card)
+        if want is not None and len(b.chips) < want:
+            out[b.serial] = (len(b.chips), want)
+    return out
+
+
+def is_dead_serial(serial: str) -> bool:
+    """True for a serial made only of ones: 0xffffffff, in any spelling.
+
+    A chip that has fallen off the bus (a failed reset, a killed hung run)
+    answers every register read with all ones, so its tt_serial arrives as
+    FFFFFFFFFFFFFFFF. That is not an empty string, but it is no more a board
+    serial: every dead chip reads the same, so they would all group together,
+    and the real board partner of each would be left a board of one.
+    """
+    digits = serial[2:] if serial[:2] in ("0x", "0X") else serial
+    return bool(digits) and all(ch in "fF" for ch in digits)
+
+
 def read_topology(sysfs_root: str | None = None) -> list[Board]:
+    """The readable boards of `read_topology_full`."""
+    return read_topology_full(sysfs_root).boards
+
+
+def read_topology_full(sysfs_root: str | None = None) -> Topology:
     """Enumerate chips and group them into boards by tt_serial.
 
     Boards are sorted by serial, chips within a board by device index, so output
     is deterministic and tests can assert on order.
+
+    A chip whose serial is all ones (see `is_dead_serial`) is returned in
+    `unreadable` and takes no part in boards or the lease grain, so nothing can
+    be granted it. An empty or missing serial is still an error, below.
     """
     root = sysfs_root or os.environ.get("GOZER_SYSFS_ROOT") or DEFAULT_SYSFS_ROOT
     if not os.path.isdir(root):
@@ -102,24 +153,34 @@ def read_topology(sysfs_root: str | None = None) -> list[Board]:
     # gozer hand out half a p300c while UMD still gives the tenant both chips.
     # That is precisely the unenforceable lease the README promises never
     # happens, so refuse (exit 14) rather than degrade into it.
-    unreadable = [c.bdf for c in chips if not c.serial]
-    if unreadable:
+    no_serial = [c.bdf for c in chips if not c.serial]
+    if no_serial:
         raise TopologyError(
-            f"unreadable tt_serial for {', '.join(sorted(unreadable))} under "
+            f"unreadable tt_serial for {', '.join(sorted(no_serial))} under "
             f"{root} -- board serials are what determine the lease grain, so "
             "gozer cannot safely decide what to hand out; check the driver "
             "(tt-kmd) and permissions on these sysfs attributes")
+
+    dead = sorted((c for c in chips if is_dead_serial(c.serial)),
+                  key=lambda c: c.dev_index)
+    chips = [c for c in chips if not is_dead_serial(c.serial)]
+    if not chips:
+        raise TopologyError(
+            f"every Tenstorrent chip under {root} reads an all-ones tt_serial "
+            "(the chips are not responding); nothing can be leased")
 
     by_serial: dict[str, list[Chip]] = {}
     for c in chips:
         by_serial.setdefault(c.serial, []).append(c)
 
-    return [
-        Board(serial=serial,
-              card=members[0].card,
-              chips=sorted(members, key=lambda c: c.dev_index))
-        for serial, members in sorted(by_serial.items())
-    ]
+    return Topology(
+        boards=[
+            Board(serial=serial,
+                  card=members[0].card,
+                  chips=sorted(members, key=lambda c: c.dev_index))
+            for serial, members in sorted(by_serial.items())
+        ],
+        unreadable=dead)
 
 
 def all_chips(boards: list[Board]) -> list[Chip]:

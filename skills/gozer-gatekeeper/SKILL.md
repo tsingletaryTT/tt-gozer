@@ -26,6 +26,16 @@ What to do about each, which the README does not say:
 - `HELD`, `CLAIMED` — nothing. Working as intended.
 - `HELD-FOREIGN` — a device holder that is neither the lease owner, the owner's process-group leader, nor a descendant of the owner. Investigate before anything else; the lease is lying. Re-run `gozer status` once before acting, because a process that exits while gozer reads its parent chain can show `HELD-FOREIGN` for a moment.
 - `BUSY-UNTRACKED` — do not take it. Adopt it (below).
+- `UNREADABLE` — the chip answers every read with all ones (its `tt_serial` is
+  `FFFFFFFFFFFFFFFF`), as after a failed reset or a killed hung run. gozer never grants it,
+  and `--exact` on it is refused. A per-chip reset (`release`, or acquire then release) has
+  already failed on it, so do not repeat that. Do not run `tt-smi -r` by hand either. Run
+  `gozer reset-all --who ...` instead, when the whole box is free. If it exits 20, tell a
+  human that the box needs a power cycle or the card needs reseating.
+- `DEGRADED` — a free chip whose board lost a chip (a p300 with one chip `UNREADABLE`).
+  Never granted: UMD would expand the grant to the dead chip. `gozer reset-all` repairs both.
+  `reset-all` refuses while any chip is held, queued for or in use, and says which. It does not
+  queue. Wait for the box to be free, or ask whoever holds it.
 - `STALE` — `status` reports it but deliberately leaves it on disk (it never mutates state).
   Clear it with `gozer reconcile`.
 
