@@ -1,0 +1,5 @@
+bin/gozer-install-skills usr/bin
+skills/* usr/share/tt-gozer/skills
+contrib/gozer-reconcile.service usr/lib/systemd/user
+contrib/gozer-reconcile.timer usr/lib/systemd/user
+README.md usr/share/doc/tt-gozer

@@ -50,3 +50,15 @@ def test_setuptools_floor_is_old_enough_for_distro_packages():
 def test_license_is_apache_text_form():
     # The SPDX string form needs setuptools 77+; the table form works from 61.
     assert _load()["project"]["license"] == {"text": "Apache-2.0"}
+
+
+def test_entry_point_main_can_be_called_without_arguments(monkeypatch, capsys):
+    # The generated /usr/bin/gozer runs `sys.exit(main())`, so main() must
+    # default argv to sys.argv[1:]. Found when the built .deb crashed on
+    # `gozer --version` with "missing 1 required positional argument".
+    from gozer.cli import main
+    monkeypatch.setattr("sys.argv", ["gozer", "--version"])
+    with pytest.raises(SystemExit) as e:
+        main()
+    assert e.value.code == 0
+    assert capsys.readouterr().out.startswith("gozer ")

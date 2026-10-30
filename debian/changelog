@@ -1,0 +1,7 @@
+tt-gozer (0.3.9) unstable; urgency=medium
+
+  * First Debian package. Installs the gozer command, the three Claude Code
+    skills, gozer-install-skills, a man page, and the reconcile systemd user
+    units (installed, never enabled).
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Fri, 30 Oct 2026 12:00:00 -0700

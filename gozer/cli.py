@@ -731,7 +731,9 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def main(argv: list[str]) -> int:
+def main(argv: list[str] | None = None) -> int:
+    # argv defaults to sys.argv[1:] because the console script that setuptools
+    # generates (and so the Debian package) calls main() with no arguments.
     args = build_parser().parse_args(argv)
     if getattr(args, "command", None) and args.command and args.command[0] == "--":
         args.command = args.command[1:]

@@ -1,0 +1,3 @@
+# The template is rendered by `gozer report` into a static page that its author
+# publishes. Nothing in the package loads it in a browser.
+tt-gozer: privacy-breach-generic * [usr/lib/python3/dist-packages/gozer/report_template.html]

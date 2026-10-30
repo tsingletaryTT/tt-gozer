@@ -1,0 +1,48 @@
+#!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
+# autopkgtest: the installed gozer reports its version and grants and releases
+# one lease on a fake two-board box. Nothing here touches real hardware: sysfs
+# and /proc are fake trees in a temp dir, and the reset command is /bin/true.
+set -eu
+
+T=$(mktemp -d)
+trap 'rm -rf "$T"' EXIT
+
+gozer --version
+
+# Fake /sys/class/tenstorrent: four chips on two boards (two chips share a
+# serial), the shape of tests/conftest.py QUIETBOX.
+mkchip() {  # index bdf serial asic
+    d="$T/sys/class/tenstorrent/tenstorrent!$1"
+    mkdir -p "$d" "$T/sys/bus/pci/devices/$2"
+    echo "$3"    > "$d/tt_serial"
+    echo "$4"    > "$d/tt_asic_id"
+    echo p300c   > "$d/tt_card_type"
+    echo 12345   > "$d/tt_heartbeat"
+    ln -s "$T/sys/bus/pci/devices/$2" "$d/device"
+}
+mkchip 0 0000:01:00.0 0000000000000002 1111111111111111
+mkchip 1 0000:02:00.0 0000000000000002 2222222222222222
+mkchip 2 0000:03:00.0 0000000000000001 3333333333333333
+mkchip 3 0000:04:00.0 0000000000000001 4444444444444444
+
+# Fake /proc: one process with a fd directory and a comm, holding nothing.
+mkdir -p "$T/proc/1/fd"
+echo init > "$T/proc/1/comm"
+printf 'Name:\tinit\nPPid:\t0\n' > "$T/proc/1/status"
+
+export GOZER_ROOT="$T/gozer"
+export GOZER_HISTORY_ROOT="$T/history"
+export GOZER_SYSFS_ROOT="$T/sys/class/tenstorrent"
+export GOZER_PROC_ROOT="$T/proc"
+export GOZER_RESET_CMD=/bin/true
+
+gozer topology
+OUT=$(gozer acquire --chips 1 --who autopkgtest --reason "smoke test")
+echo "$OUT"
+LEASE=$(echo "$OUT" | sed -n 's/.*release with: gozer release \([0-9a-f]*\).*/\1/p' | head -n 1)
+[ -n "$LEASE" ] || { echo "no lease id in acquire output" >&2; exit 1; }
+gozer status
+gozer release "$LEASE"
+gozer history
