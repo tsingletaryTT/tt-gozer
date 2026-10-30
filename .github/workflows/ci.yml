@@ -1,0 +1,83 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
+# CI: the test suite, a check that docs/index.html is current, and a Debian
+# package build with lintian. It never publishes anything; releases are cut
+# by release.yml from a v* tag.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install test dependencies
+        run: pip install pytest pytest-timeout
+      - name: Run the suite
+        run: python -m pytest -q
+
+  site-current:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: docs/index.html matches its sources
+        run: python scripts/build_site.py --check
+
+  deb:
+    runs-on: ubuntu-latest
+    container: debian:12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential devscripts equivs fakeroot lintian ca-certificates
+      - name: Install build dependencies from debian/control
+        run: |
+          mk-build-deps -i -r -t "apt-get -y --no-install-recommends" debian/control
+      - name: Build the package in a copy outside the checkout
+        run: |
+          mkdir -p /tmp/build
+          cp -a "$GITHUB_WORKSPACE" /tmp/build/tt-gozer
+          cd /tmp/build/tt-gozer
+          dpkg-buildpackage -us -uc -b
+          cd /tmp/build
+          ls -l
+          cp tt-gozer_*_all.deb tt-gozer_*.changes "$GITHUB_WORKSPACE"/
+      - name: lintian
+        run: |
+          cd /tmp/build
+          status=0
+          lintian --info --display-info --pedantic --fail-on error tt-gozer_*.changes \
+            > /tmp/lintian.txt 2>&1 || status=$?
+          cat /tmp/lintian.txt
+          {
+            echo "### lintian"
+            echo '```'
+            cat /tmp/lintian.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tt-gozer-deb
+          path: tt-gozer_*_all.deb
+          if-no-files-found: error
