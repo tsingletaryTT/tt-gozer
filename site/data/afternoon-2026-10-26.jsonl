@@ -1,0 +1,94 @@
+{"chips": ["0000:03:00.0", "0000:04:00.0"], "event": "granted", "lease_id": "f136d4", "ts": "2026-10-26T16:09:48Z", "who": "claude:orchard-kernel-probe"}
+{"chips": ["0000:03:00.0", "0000:04:00.0"], "duration_s": 46.0, "event": "released", "lease_id": "f136d4", "ts": "2026-10-26T16:10:34Z", "who": "claude:orchard-kernel-probe"}
+{"chips": ["0000:03:00.0", "0000:04:00.0"], "event": "granted", "lease_id": "2ce736", "ts": "2026-10-26T16:11:30Z", "who": "claude:orchard-kernel-probe"}
+{"chips": ["0000:03:00.0", "0000:04:00.0"], "duration_s": 45.0, "event": "released", "lease_id": "2ce736", "ts": "2026-10-26T16:12:15Z", "who": "claude:orchard-kernel-probe"}
+{"chips": ["0000:01:00.0", "0000:02:00.0"], "event": "granted", "lease_id": "857216", "ts": "2026-10-26T16:32:27Z", "who": "studio:animatediff"}
+{"chips": ["0000:01:00.0", "0000:02:00.0"], "duration_s": 113.0, "event": "released", "lease_id": "857216", "ts": "2026-10-26T16:34:20Z", "who": "studio:animatediff"}
+{"chips": ["0000:03:00.0", "0000:04:00.0"], "event": "granted", "lease_id": "475664", "ts": "2026-10-26T16:38:14Z", "who": "claude:metal-upgrade"}
+{"chips": ["0000:03:00.0", "0000:04:00.0"], "duration_s": 46.0, "event": "released", "lease_id": "475664", "ts": "2026-10-26T16:39:00Z", "who": "claude:metal-upgrade"}
+{"chips": ["0000:01:00.0", "0000:02:00.0"], "event": "granted", "lease_id": "763367", "ts": "2026-10-26T16:39:09Z", "who": "claude:orchard-kernel-probe"}
+{"chips": ["0000:01:00.0", "0000:02:00.0"], "duration_s": 47.0, "event": "released", "lease_id": "763367", "ts": "2026-10-26T16:39:56Z", "who": "claude:orchard-kernel-probe"}
+{"chips": ["0000:01:00.0", "0000:02:00.0"], "event": "granted", "lease_id": "38dd26", "ts": "2026-10-26T16:39:56Z", "who": "claude:orchard-kernel-probe"}
+{"chips": ["0000:01:00.0", "0000:02:00.0"], "duration_s": 47.0, "event": "released", "lease_id": "38dd26", "ts": "2026-10-26T16:40:43Z", "who": "claude:orchard-kernel-probe"}
+{"chips": ["0000:01:00.0", "0000:02:00.0"], "event": "granted", "lease_id": "5ee398", "ts": "2026-10-26T16:40:43Z", "who": "claude:orchard-kernel-probe"}
+{"chips": ["0000:01:00.0", "0000:02:00.0"], "duration_s": 48.0, "event": "released", "lease_id": "5ee398", "ts": "2026-10-26T16:41:31Z", "who": "claude:orchard-kernel-probe"}
+{"chips": ["0000:01:00.0", "0000:02:00.0"], "event": "granted", "lease_id": "a308ba", "ts": "2026-10-26T16:41:31Z", "who": "claude:orchard-kernel-probe"}
+{"chips": ["0000:01:00.0", "0000:02:00.0"], "duration_s": 47.0, "event": "released", "lease_id": "a308ba", "ts": "2026-10-26T16:42:18Z", "who": "claude:orchard-kernel-probe"}
+{"chips": ["0000:01:00.0", "0000:02:00.0"], "event": "granted", "lease_id": "c717a0", "ts": "2026-10-26T16:44:45Z", "who": "studio:animatediff"}
+{"chips": ["0000:01:00.0", "0000:02:00.0"], "duration_s": 226.0, "event": "released", "lease_id": "c717a0", "ts": "2026-10-26T16:48:31Z", "who": "studio:animatediff"}
+{"chips": ["0000:01:00.0", "0000:02:00.0"], "event": "granted", "lease_id": "14a998", "ts": "2026-10-26T16:56:52Z", "who": "studio:animatediff"}
+{"chips": ["0000:03:00.0", "0000:04:00.0"], "event": "granted", "lease_id": "70438f", "ts": "2026-10-26T16:59:11Z", "who": "studio:audio8-asr"}
+{"chips": ["0000:01:00.0", "0000:02:00.0"], "duration_s": 152.0, "event": "released", "lease_id": "14a998", "ts": "2026-10-26T16:59:24Z", "who": "studio:animatediff"}
+{"chips": ["0000:03:00.0", "0000:04:00.0"], "duration_s": 82.0, "event": "released", "lease_id": "70438f", "ts": "2026-10-26T17:00:33Z", "who": "studio:audio8-asr"}
+{"chips": ["0000:03:00.0", "0000:04:00.0"], "event": "granted", "lease_id": "50e708", "ts": "2026-10-26T17:03:46Z", "who": "claude:kernel-probe"}
+{"chips": ["0000:01:00.0", "0000:02:00.0"], "event": "granted", "lease_id": "e45a86", "ts": "2026-10-26T17:12:42Z", "who": "claude:suite-control"}
+{"event": "queued", "ticket": "9d82", "ts": "2026-10-26T17:13:10Z", "who": "claude:graft-accept"}
+{"event": "queued", "ticket": "992a", "ts": "2026-10-26T17:45:31Z", "who": "claude:full-port-pilot"}
+{"chips": ["0000:01:00.0", "0000:02:00.0"], "duration_s": 2072.0, "event": "released", "lease_id": "e45a86", "ts": "2026-10-26T17:47:14Z", "who": "claude:suite-control"}
+{"chips": ["0000:01:00.0", "0000:02:00.0"], "event": "granted", "lease_id": "f95f3d", "ts": "2026-10-26T17:47:18Z", "who": "claude:graft-accept"}
+{"event": "queued", "ticket": "e495", "ts": "2026-10-26T17:47:25Z", "who": "claude:suite-control"}
+{"event": "queued", "ticket": "7f1a", "ts": "2026-10-26T17:47:25Z", "who": "claude:suite-control"}
+{"event": "queued", "ticket": "106e", "ts": "2026-10-26T17:47:46Z", "who": "claude:suite-control"}
+{"event": "queued", "ticket": "4128", "ts": "2026-10-26T17:48:46Z", "who": "claude:suite-control"}
+{"event": "queued", "ticket": "2ba1", "ts": "2026-10-26T17:49:46Z", "who": "claude:suite-control"}
+{"event": "queued", "ticket": "ae71", "ts": "2026-10-26T17:50:46Z", "who": "claude:suite-control"}
+{"event": "queued", "ticket": "ce96", "ts": "2026-10-26T17:51:46Z", "who": "claude:suite-control"}
+{"event": "queued", "ticket": "8af7", "ts": "2026-10-26T17:52:46Z", "who": "claude:suite-control"}
+{"event": "queued", "ticket": "de6b", "ts": "2026-10-26T17:53:46Z", "who": "claude:suite-control"}
+{"event": "queued", "ticket": "a5b3", "ts": "2026-10-26T17:54:47Z", "who": "claude:suite-control"}
+{"event": "queued", "ticket": "670f", "ts": "2026-10-26T17:55:47Z", "who": "claude:suite-control"}
+{"event": "queued", "ticket": "1e62", "ts": "2026-10-26T17:56:47Z", "who": "claude:suite-control"}
+{"event": "queued", "ticket": "621e", "ts": "2026-10-26T17:57:47Z", "who": "claude:suite-control"}
+{"event": "queued", "ticket": "075b", "ts": "2026-10-26T17:58:47Z", "who": "claude:suite-control"}
+{"event": "queued", "ticket": "fe60", "ts": "2026-10-26T17:59:47Z", "who": "claude:suite-control"}
+{"event": "queued", "ticket": "3c03", "ts": "2026-10-26T18:00:47Z", "who": "claude:suite-control"}
+{"event": "queued", "ticket": "8637", "ts": "2026-10-26T18:01:47Z", "who": "claude:suite-control"}
+{"event": "queued", "ticket": "3858", "ts": "2026-10-26T18:02:47Z", "who": "claude:suite-control"}
+{"event": "queued", "ticket": "5bf4", "ts": "2026-10-26T18:03:47Z", "who": "claude:suite-control"}
+{"event": "queued", "ticket": "3638", "ts": "2026-10-26T18:04:47Z", "who": "claude:suite-control"}
+{"event": "queued", "ticket": "0d88", "ts": "2026-10-26T18:05:47Z", "who": "claude:suite-control"}
+{"event": "queued", "ticket": "409c", "ts": "2026-10-26T18:06:47Z", "who": "claude:suite-control"}
+{"event": "queued", "ticket": "87fc", "ts": "2026-10-26T18:07:47Z", "who": "claude:suite-control"}
+{"event": "queued", "ticket": "93ec", "ts": "2026-10-26T18:08:47Z", "who": "claude:suite-control"}
+{"event": "queued", "ticket": "c9d4", "ts": "2026-10-26T18:09:47Z", "who": "claude:suite-control"}
+{"event": "queued", "ticket": "9306", "ts": "2026-10-26T18:10:47Z", "who": "claude:suite-control"}
+{"event": "queued", "ticket": "9767", "ts": "2026-10-26T18:11:48Z", "who": "claude:suite-control"}
+{"chips": ["0000:01:00.0", "0000:02:00.0"], "duration_s": 1524.0, "event": "released", "lease_id": "f95f3d", "ts": "2026-10-26T18:12:42Z", "who": "claude:graft-accept"}
+{"chips": ["0000:01:00.0", "0000:02:00.0"], "event": "granted", "lease_id": "b1339d", "ts": "2026-10-26T18:12:42Z", "who": "claude:full-port-pilot"}
+{"event": "queued", "ticket": "ccb0", "ts": "2026-10-26T18:12:48Z", "who": "claude:suite-control"}
+{"event": "queued", "ticket": "78af", "ts": "2026-10-26T18:12:56Z", "who": "claude:graft-accept"}
+{"event": "queued", "ticket": "496e", "ts": "2026-10-26T18:13:48Z", "who": "claude:suite-control"}
+{"event": "queued", "ticket": "8d14", "ts": "2026-10-26T18:14:48Z", "who": "claude:suite-control"}
+{"event": "queued", "ticket": "9eb2", "ts": "2026-10-26T18:15:48Z", "who": "claude:suite-control"}
+{"chips": ["0000:01:00.0", "0000:02:00.0"], "duration_s": 202.0, "event": "released", "lease_id": "b1339d", "ts": "2026-10-26T18:16:04Z", "who": "claude:full-port-pilot"}
+{"event": "queued", "ticket": "026c", "ts": "2026-10-26T18:16:48Z", "who": "claude:suite-control"}
+{"event": "queued", "ticket": "2600", "ts": "2026-10-26T18:17:48Z", "who": "claude:suite-control"}
+{"event": "queued", "ticket": "b4d9", "ts": "2026-10-26T18:18:48Z", "who": "claude:suite-control"}
+{"event": "queued", "ticket": "fef2", "ts": "2026-10-26T18:19:48Z", "who": "claude:suite-control"}
+{"event": "queued", "ticket": "b518", "ts": "2026-10-26T18:20:48Z", "who": "claude:suite-control"}
+{"chips": ["0000:01:00.0", "0000:02:00.0"], "event": "granted", "lease_id": "b1f795", "ts": "2026-10-26T18:21:27Z", "who": "claude:graft-accept"}
+{"event": "queued", "ticket": "6673", "ts": "2026-10-26T18:21:41Z", "who": "claude:full-port-pilot"}
+{"event": "queued", "ticket": "b9a3", "ts": "2026-10-26T18:21:48Z", "who": "claude:suite-control"}
+{"event": "queued", "ticket": "9572", "ts": "2026-10-26T18:22:48Z", "who": "claude:suite-control"}
+{"event": "queued", "ticket": "1700", "ts": "2026-10-26T18:23:48Z", "who": "claude:suite-control"}
+{"event": "queued", "ticket": "5093", "ts": "2026-10-26T18:24:48Z", "who": "claude:suite-control"}
+{"event": "queued", "ticket": "32bd", "ts": "2026-10-26T18:25:48Z", "who": "claude:suite-control"}
+{"event": "queued", "ticket": "0f1b", "ts": "2026-10-26T18:26:48Z", "who": "claude:suite-control"}
+{"event": "queued", "ticket": "cc8f", "ts": "2026-10-26T18:27:48Z", "who": "claude:suite-control"}
+{"event": "queued", "ticket": "e306", "ts": "2026-10-26T18:28:49Z", "who": "claude:suite-control"}
+{"event": "queued", "ticket": "9bc0", "ts": "2026-10-26T18:29:49Z", "who": "claude:suite-control"}
+{"event": "queued", "ticket": "ed03", "ts": "2026-10-26T18:30:49Z", "who": "claude:suite-control"}
+{"event": "queued", "ticket": "6b1d", "ts": "2026-10-26T18:31:49Z", "who": "claude:suite-control"}
+{"event": "queued", "ticket": "ff58", "ts": "2026-10-26T18:32:49Z", "who": "claude:suite-control"}
+{"event": "queued", "ticket": "5cc3", "ts": "2026-10-26T18:33:49Z", "who": "claude:suite-control"}
+{"event": "queued", "ticket": "c390", "ts": "2026-10-26T18:34:49Z", "who": "claude:suite-control"}
+{"event": "queued", "ticket": "cca2", "ts": "2026-10-26T18:35:49Z", "who": "claude:suite-control"}
+{"event": "queued", "ticket": "70d2", "ts": "2026-10-26T18:36:49Z", "who": "claude:suite-control"}
+{"event": "queued", "ticket": "06f0", "ts": "2026-10-26T18:37:49Z", "who": "claude:suite-control"}
+{"chips": ["0000:01:00.0", "0000:02:00.0"], "duration_s": 3221.0, "event": "released", "lease_id": "b1f795", "ts": "2026-10-26T19:15:08Z", "who": "claude:graft-accept"}
+{"chips": ["0000:01:00.0", "0000:02:00.0"], "event": "granted", "lease_id": "b5cd13", "ts": "2026-10-26T19:16:12Z", "who": "claude:graft-accept"}
+{"chips": ["0000:01:00.0", "0000:02:00.0"], "duration_s": 2168.0, "event": "released", "lease_id": "b5cd13", "ts": "2026-10-26T19:52:20Z", "who": "claude:graft-accept"}
+{"chips": ["0000:01:00.0", "0000:02:00.0"], "event": "granted", "lease_id": "aefd2e", "ts": "2026-10-26T19:53:16Z", "who": "claude:graft-accept"}
+{"event": "queued", "ticket": "5bb6", "ts": "2026-10-26T20:15:34Z", "who": "claude:suite-control"}
+{"chips": ["0000:03:00.0", "0000:04:00.0"], "duration_s": 14705.0, "event": "released", "lease_id": "50e708", "ts": "2026-10-26T21:08:51Z", "who": "claude:kernel-probe"}
+{"chips": ["0000:01:00.0", "0000:02:00.0"], "duration_s": 5698.0, "event": "released", "lease_id": "aefd2e", "ts": "2026-10-26T21:28:14Z", "who": "claude:graft-accept"}
