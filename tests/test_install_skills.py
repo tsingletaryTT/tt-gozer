@@ -69,6 +69,14 @@ def test_second_run_is_a_no_op_exit_0(tmp_path):
         assert not (src / name / name).exists()
 
 
+def _linked(skills_dir):
+    """Names under skills_dir that are symlinks (what the script creates)."""
+    if not os.path.isdir(skills_dir):
+        return []
+    return sorted(n for n in os.listdir(skills_dir)
+                  if os.path.islink(os.path.join(skills_dir, n)))
+
+
 def test_refuses_when_target_is_a_real_directory(tmp_path):
     home, src = tmp_path / "home", _src(tmp_path)
     target = home / ".claude" / "skills" / "gozer-park"
@@ -80,6 +88,67 @@ def test_refuses_when_target_is_a_real_directory(tmp_path):
     assert not os.path.islink(target)
     assert sorted(os.listdir(target)) == ["leftover.txt"]
     assert (target / "leftover.txt").read_text() == "keep me\n"
+    # Atomic: the refusal came before any link was made, whatever the order.
+    assert _linked(home / ".claude" / "skills") == []
+
+
+def test_refuses_when_target_is_a_regular_file(tmp_path):
+    home, src = tmp_path / "home", _src(tmp_path)
+    skills = home / ".claude" / "skills"
+    skills.mkdir(parents=True)
+    target = skills / "gozer-park"
+    target.write_text("not a skill\n")
+    r = _run(home, "--from", str(src))
+    assert r.returncode == 1
+    assert str(target) in r.stderr
+    assert not os.path.islink(target)
+    assert target.read_text() == "not a skill\n"
+    assert _linked(skills) == []
+
+
+def test_from_an_empty_directory_exits_1_with_a_message(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    r = _run(home, "--from", str(empty))
+    assert r.returncode == 1
+    assert "no gozer-* skill directories" in r.stderr
+    assert not (home / ".claude").exists()
+
+
+def test_from_a_missing_directory_exits_1(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    r = _run(home, "--from", str(tmp_path / "nope"))
+    assert r.returncode == 1
+    assert "does not exist" in r.stderr
+
+
+def test_unknown_argument_exits_2(tmp_path):
+    r = _run(tmp_path, "--bogus")
+    assert r.returncode == 2
+    assert "unknown argument" in r.stderr
+
+
+def test_home_unset_without_to_says_so_and_exits_2(tmp_path):
+    src = _src(tmp_path)
+    env = {k: v for k, v in os.environ.items() if k != "HOME"}
+    r = subprocess.run([SCRIPT, "--from", str(src)], env=env,
+                       capture_output=True, text=True)
+    assert r.returncode == 2
+    assert r.stderr.strip() == "gozer-install-skills: HOME is not set; pass --to DIR"
+    assert "unbound" not in r.stderr
+
+
+def test_home_unset_is_fine_when_to_is_given(tmp_path):
+    src = _src(tmp_path)
+    dest = tmp_path / "skills"
+    env = {k: v for k, v in os.environ.items() if k != "HOME"}
+    r = subprocess.run([SCRIPT, "--from", str(src), "--to", str(dest)], env=env,
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert _linked(dest) == sorted(SKILLS)
 
 
 def test_creates_the_target_dir_when_absent(tmp_path):
