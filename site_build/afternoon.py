@@ -54,7 +54,7 @@ def _epoch(ts: str) -> int:
 
 
 def facts(records: list[dict]) -> dict:
-    """Numbers computed from the records only. Keys are absent when the data has none."""
+    """Numbers computed from the records only. Optional keys are absent when the data has none."""
     recs = sorted(records, key=lambda r: r["ts"])
     out: dict = {"waits": [], "same_second_handoffs": 0}
 
@@ -93,9 +93,11 @@ def facts(records: list[dict]) -> dict:
             if prior:
                 gaps.append(_epoch(r["ts"]) - _epoch(max(prior)))
     out["waits"] = sorted(waits, key=lambda w: (w["who"], w["seconds"]))
-    if gaps:
-        out["fastest_handoff_s"] = min(gaps)
-        out["same_second_handoffs"] = sum(1 for g in gaps if g == 0)
+    # Fastest handoff is the smallest gap above zero; gaps of zero are counted
+    # separately as same-second handoffs.
+    positive = [g for g in gaps if g > 0]
+    out["fastest_handoff_s"] = min(positive) if positive else None
+    out["same_second_handoffs"] = sum(1 for g in gaps if g == 0)
     return out
 
 
@@ -126,10 +128,9 @@ def captions(f: dict) -> list[str]:
                    f"each lease lasting about {_dur(c['typical_s'])}.")
     for w in f.get("waits", []):
         out.append(f"{w['who']} queued and waited {_dur(w['seconds'])} for a board.")
-    if "fastest_handoff_s" in f:
-        t = f["fastest_handoff_s"]
-        gap = "in the same second" if t == 0 else f"{_dur(t)} later"
-        out.append(f"The fastest handoff from a release to the next waiting agent came {gap}.")
+    if f.get("fastest_handoff_s") is not None:
+        out.append(f"The fastest handoff from a release to the next waiting agent "
+                   f"took {_dur(f['fastest_handoff_s'])}.")
     n = f.get("same_second_handoffs", 0)
     if n:
         out.append(f"{n} waiting agent{'s' if n != 1 else ''} got a board in the same second it was released.")

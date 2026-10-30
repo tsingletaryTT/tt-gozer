@@ -57,11 +57,8 @@ def test_facts_match_the_log_the_spec_quotes():
     waits = {(w["who"], w["seconds"]) for w in f["waits"]}
     assert ("claude:graft-accept", 2048) in waits
     assert ("claude:full-port-pilot", 1631) in waits
-    # The spec's "fastest handoff 4 s" is the fastest non-zero gap (17:47:14 to
-    # 17:47:18). The data also has a same-second handoff (18:12:42), which the
-    # agreed definition counts as a gap of 0, so the minimum is 0.
-    assert f["fastest_handoff_s"] == 0
-    assert f["same_second_handoffs"] >= 1
+    assert f["fastest_handoff_s"] == 4
+    assert f["same_second_handoffs"] == 1
     assert f["rapid_cycles"]["count"] == 6
     assert f["rapid_cycles"]["who"] == "claude:orchard-kernel-probe"
     assert 44 <= f["rapid_cycles"]["typical_s"] <= 50
@@ -106,7 +103,7 @@ def test_lease_with_no_release_is_labelled_still_running():
 def test_no_queue_events_still_renders():
     recs = [g("2026-10-26T17:00:00Z", "claude:a", "x"), r("2026-10-26T18:00:00Z", "claude:a", "x", 3600)]
     f = facts(recs)
-    assert f["waits"] == [] and "fastest_handoff_s" not in f
+    assert f["waits"] == [] and f["fastest_handoff_s"] is None
     assert captions(f)
     assert "claude:a" in lanes_html(recs, START, END)
 
@@ -116,3 +113,66 @@ def test_empty_window_renders_a_message_not_a_crash():
     assert captions(facts([])) == []
     out = lanes_html([], START, END)
     assert "No leases" in out
+
+
+def _handoff(gap_s):
+    """B queues, A releases, B is granted gap_s later, all on board 1."""
+    t = "2026-10-26T17:00:%02dZ"
+    return [g(t % 0, "claude:a", "a1"),
+            {"ts": t % 1, "event": "queued", "who": "claude:b", "ticket": "t"},
+            r(t % 10, "claude:a", "a1", 10),
+            g(t % (10 + gap_s), "claude:b", "b1")]
+
+
+def test_only_same_second_handoffs_give_no_fastest_handoff():
+    f = facts(_handoff(0))
+    assert f["fastest_handoff_s"] is None and f["same_second_handoffs"] == 1
+    text = " ".join(captions(f))
+    assert "fastest handoff" not in text and "same second" in text
+
+
+def test_moving_a_grant_changes_the_fact_and_its_caption():
+    f4 = facts(_handoff(4))
+    f7 = facts(_handoff(7))
+    assert f4["fastest_handoff_s"] == 4 and f7["fastest_handoff_s"] == 7
+    assert any("took 4 seconds" in c for c in captions(f4))
+    assert any("took 7 seconds" in c for c in captions(f7))
+    assert not any("took 4 seconds" in c for c in captions(f7))
+
+
+def q(ts, who):
+    return {"ts": ts, "event": "queued", "who": who, "ticket": "t"}
+
+
+def test_wait_counts_from_the_first_poll_to_the_next_grant():
+    recs = [q("2026-10-26T17:00:00Z", "claude:b"), q("2026-10-26T17:01:00Z", "claude:b"),
+            q("2026-10-26T17:02:00Z", "claude:b"), g("2026-10-26T17:10:00Z", "claude:b", "b1")]
+    assert facts(recs)["waits"] == [{"who": "claude:b", "seconds": 600}]
+
+
+def test_wait_starts_after_the_agents_previous_release():
+    recs = [g("2026-10-26T16:00:00Z", "claude:b", "b0"), q("2026-10-26T16:05:00Z", "claude:b"),
+            r("2026-10-26T16:10:00Z", "claude:b", "b0", 600),
+            q("2026-10-26T16:20:00Z", "claude:b"), g("2026-10-26T16:30:00Z", "claude:b", "b1")]
+    assert facts(recs)["waits"] == [{"who": "claude:b", "seconds": 600}]
+
+
+def test_rapid_cycles_ignore_long_leases_and_need_three_short_ones():
+    recs = []
+    for i in range(5):  # five long leases must not count
+        recs.append(r(f"2026-10-26T17:0{i}:00Z", "claude:long", f"l{i}", 130 + i))
+    for i in range(3):
+        recs.append(r(f"2026-10-26T18:0{i}:00Z", "claude:quick", f"q{i}", 30))
+    for i in range(2):  # only two short leases: below the reporting threshold
+        recs.append(r(f"2026-10-26T19:0{i}:00Z", "claude:few", f"f{i}", 20))
+    rc = facts(recs)["rapid_cycles"]
+    assert rc == {"who": "claude:quick", "count": 3, "typical_s": 30}
+    assert "rapid_cycles" not in facts(recs[:5] + recs[-2:])
+    # exactly 120 s is not under the limit
+    assert "rapid_cycles" not in facts([r(f"2026-10-26T17:0{i}:00Z", "claude:x", f"x{i}", 120) for i in range(3)])
+
+
+def test_extract_window_edges_are_inclusive():
+    ev = [g(START, "claude:a", "s"), g(END, "claude:a", "e"),
+          g("2026-10-26T15:59:59Z", "claude:a", "before"), g("2026-10-26T20:30:01Z", "claude:a", "after")]
+    assert [e["lease_id"] for e in extract(ev, START, END)] == ["s", "e"]
