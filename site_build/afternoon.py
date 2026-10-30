@@ -224,7 +224,8 @@ def lanes_html(records: list[dict], start: str, end: str) -> str:
                 f'<div class="lease" style="position:absolute;top:2px;bottom:2px;'
                 f'left:{left:.2f}%;width:{width:.2f}%;background:{bg};color:{fg};'
                 f'overflow:hidden;white-space:nowrap;font-size:11px;padding:0 3px;'
-                f'box-sizing:border-box;border-radius:2px" title="{esc(title, quote=True)}">'
+                f'box-sizing:border-box;border-radius:2px" title="{esc(title, quote=True)}" '
+                f'tabindex="0" role="img" aria-label="{esc(title, quote=True)}">'
                 f'{label}</div>')
         rows.append(
             f'<div class="lane" style="display:flex;align-items:center;gap:8px;margin:4px 0">'
@@ -241,3 +242,42 @@ def lanes_html(records: list[dict], start: str, end: str) -> str:
             f'margin-left:72px"><span>{esc(start)}</span><span>{esc(end)}</span></div>')
     return (f'<div class="lanes" style="width:100%">{"".join(rows)}{axis}'
             f'<ul class="legend" style="list-style:none;padding:0;margin:8px 0 0">{legend}</ul></div>')
+
+
+def _hms(epoch: int) -> str:
+    return datetime.fromtimestamp(epoch, timezone.utc).strftime("%H:%M:%S")
+
+
+def lease_table_html(records: list[dict], start: str, end: str) -> str:
+    """Every lease in the window as a collapsed table (no JavaScript).
+
+    Gives keyboard and screen-reader visitors the agent and time range that
+    the timeline blocks show only in a tooltip. Times are UTC. A lease that
+    began before the window is shown from the window start, and one that ends
+    after it, or has no recorded release, is cut at the window end and says so.
+    """
+    leases = _leases(records)
+    if not leases:
+        return ""
+    t0, t1 = _epoch(start), _epoch(end)
+    esc = html.escape
+    rows = []
+    for l in sorted(leases, key=lambda x: (_epoch(x["start"]), x["who"])):
+        s = max(_epoch(l["start"]), t0)
+        if l["end"] is None:
+            e, end_text = t1, "no release recorded"
+        elif _epoch(l["end"]) > t1:
+            e, end_text = t1, "continues"
+        else:
+            e, end_text = _epoch(l["end"]), _hms(_epoch(l["end"]))
+        rows.append(
+            f'<tr><td class="who">{esc(l["who"])}</td><td>Board {l["board"] + 1}</td>'
+            f'<td class="n">{_hms(s)}</td><td class="n">{end_text}</td>'
+            f'<td class="n">{_dur(max(e - s, 0))}</td></tr>')
+    return ('<details class="lease-table"><summary>Lease times as a table</summary>'
+            '<div class="table-wrap"><table>'
+            '<caption>Every lease in the window</caption>'
+            '<thead><tr><th scope="col">Agent</th><th scope="col">Board</th>'
+            '<th scope="col" class="n">Start</th><th scope="col" class="n">End</th>'
+            '<th scope="col" class="n">Length</th></tr></thead>'
+            '<tbody>' + "".join(rows) + '</tbody></table></div></details>')

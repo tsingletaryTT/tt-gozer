@@ -231,3 +231,57 @@ def test_a_very_long_agent_name_cannot_overflow_its_block():
                      START, END)
     block = out.split('class="lease"')[1]
     assert "overflow:hidden" in block and "white-space:nowrap" in block
+
+
+# ----- keyboard access: focusable blocks and a table of the same leases -------
+
+def test_every_block_is_focusable_and_labelled_like_its_title():
+    import html as h
+    import re
+    name = 'a<b>&"c:d'
+    rec = [g("2026-10-26T17:00:00Z", name, "x1"), r("2026-10-26T17:30:00Z", name, "x1", 1800),
+           g("2026-10-26T20:00:00Z", "claude:z", "x2")]
+    frag = lanes_html(rec, START, END)
+    blocks = re.findall(r'<div class="lease"[^>]*>', frag)
+    assert len(blocks) == 2
+    for b in blocks:
+        assert 'tabindex="0"' in b and 'role="img"' in b
+        title = re.search(r' title="([^"]*)"', b).group(1)
+        label = re.search(r' aria-label="([^"]*)"', b).group(1)
+        assert label == title
+    assert h.unescape(re.search(r' aria-label="([^"]*)"', blocks[0]).group(1)) == \
+        f"{name}, 2026-10-26T17:00:00Z to 2026-10-26T17:30:00Z"
+    assert name not in frag
+
+
+def test_every_committed_block_has_tabindex_role_and_label():
+    import re
+    frag = lanes_html(committed(), START, END)
+    blocks = re.findall(r'<div class="lease"[^>]*>', frag)
+    assert blocks
+    assert all('tabindex="0"' in b and 'role="img"' in b and "aria-label=" in b for b in blocks)
+
+
+def test_lease_table_has_one_row_per_committed_lease_with_escaped_names():
+    from site_build.afternoon import lease_table_html
+    recs = committed()
+    frag = lease_table_html(recs, START, END)
+    assert frag.startswith('<details class="lease-table"><summary>Lease times as a table</summary>')
+    assert "<caption>Every lease in the window</caption>" in frag
+    for col in ("Agent", "Board", "Start", "End", "Length"):
+        assert f">{col}</th>" in frag
+    assert frag.count("<tr>") - 1 == sum(1 for x in recs if x["event"] == "granted")
+    assert "<script" not in frag
+
+
+def test_lease_table_escapes_sorts_and_words_clipping():
+    from site_build.afternoon import lease_table_html
+    name = 'a<b>&"c:d'
+    rec = [g("2026-10-26T18:00:00Z", "claude:b", "l2"),
+           g("2026-10-26T17:00:00Z", name, "l1"), r("2026-10-26T17:30:00Z", name, "l1", 1800),
+           g("2026-10-26T20:00:00Z", "claude:c", "l3"), r("2026-10-26T21:00:00Z", "claude:c", "l3", 3600)]
+    frag = lease_table_html(rec, START, END)
+    assert name not in frag and "a&lt;b&gt;&amp;&quot;c:d" in frag
+    assert frag.index("17:00:00") < frag.index("18:00:00") < frag.index("20:00:00")
+    assert "17:30:00" in frag and "30 minutes" in frag
+    assert "no release recorded" in frag and "continues" in frag

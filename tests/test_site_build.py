@@ -266,3 +266,23 @@ def test_grace_window_on_the_page_comes_from_the_constant(monkeypatch):
     text = html.unescape(render())
     assert "600 seconds (10 minutes)" in text
     assert "900" not in _visible_prose(text)
+
+
+def test_page_has_the_lease_table_inside_the_afternoon_section(page):
+    secs, _ = _sections(page)
+    sec = secs["afternoon"]
+    assert '<details class="lease-table">' in sec
+    assert sec.index('class="timeline"') < sec.index('<details class="lease-table">')
+    granted = [r for r in _records() if r["event"] == "granted"]
+    assert sec.count("<tr>") - 1 == len(granted)
+    assert "<details class=\"lease-table\" open" not in sec     # collapsed by default
+
+
+def test_lease_table_prose_passes_the_style_sweep():
+    from site_build.afternoon import lease_table_html
+    from site_build.build import WINDOW_END, WINDOW_START
+    frag = lease_table_html(_records(), WINDOW_START, WINDOW_END)
+    text = " ".join(re.findall(r"<(?:summary|caption)>(.*?)</(?:summary|caption)>", frag))
+    assert text
+    for phrase in SWEEP:
+        assert phrase.lower() not in text.lower(), phrase

@@ -111,6 +111,9 @@ section:last-of-type { border-bottom: 0; }
 .card .term { margin-bottom: 12px; }
 .card .term, .install-steps .term { white-space: pre-wrap; }
 .term .nw { white-space: nowrap; }
+.lease:focus { outline: 2px solid #092221; outline-offset: 1px; z-index: 1; }
+.lease-table { margin: 16px 0; }
+.lease-table summary { cursor: pointer; font-weight: 700; }
 
 /* ----- terminal blocks ---------------------------------------------------- */
 .term {

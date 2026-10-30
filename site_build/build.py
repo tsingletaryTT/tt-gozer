@@ -28,7 +28,7 @@ import re
 from string import Template
 
 from gozer import __version__, gatekeeper
-from site_build.afternoon import _epoch, captions, facts, lanes_html
+from site_build.afternoon import _epoch, captions, facts, lanes_html, lease_table_html
 from site_build.roster import load_users, roster
 from site_build.transcripts import run_session
 
@@ -286,6 +286,7 @@ def render() -> str:
         "steps": _steps_html(),
         "lanes": lanes,
         "legend": legend,
+        "lease_table": lease_table_html(records, WINDOW_START, WINDOW_END),
         "captions": "\n".join(f"      <li>{esc(c, quote=False)}</li>"
                               for c in captions(facts(records))),
         "diagram": DIAGRAM,
