@@ -96,14 +96,28 @@ def test_man_page_documents_every_command():
         assert var in man
 
 
+def _norm(text):
+    """Make README markdown and roff text comparable: drop backticks and roff
+    escapes, treat the em dash forms alike, ignore the arrow, collapse space."""
+    text = text.replace("\\(em", "\u2014").replace("\\-", "-").replace("\\ ", " ")
+    text = text.replace("`", "").replace("->", "").replace("\u2192", "")
+    text = text.replace("\u2014", "-")
+    return re.sub(r"\s+", " ", text).strip()
+
+
 def test_man_page_exit_codes_match_the_readme_table():
+    """Same codes and the same meaning for each, not just the same codes."""
     with open(os.path.join(REPO, "README.md"), encoding="utf-8") as f:
         readme = f.read()
-    codes = re.findall(r"^\| `(\d+)` \|", readme, re.M)
-    assert codes
+    table = {c: _norm(t) for c, t in
+             re.findall(r"^\| `(\d+)` \| (.*) \|$", readme, re.M)}
+    assert table
     man = _read("gozer.1")
-    for c in codes:
-        assert re.search(rf"^\.B {c}$", man, re.M), c
+    entries = {c: _norm(t) for c, t in
+               re.findall(r"^\.B (\d+)\n(.*)$", man, re.M)}
+    assert set(entries) == set(table)
+    for code, meaning in table.items():
+        assert entries[code] == meaning, code
 
 
 def test_install_file_places_units_under_usr_lib_systemd_user():

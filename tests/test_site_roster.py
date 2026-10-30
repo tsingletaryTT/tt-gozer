@@ -150,3 +150,11 @@ def test_load_users_rejects_a_non_list(tmp_path):
 
 def test_load_users_accepts_a_good_entry(tmp_path):
     assert load_users(write(tmp_path, [GOOD])) == [GOOD]
+
+
+def test_load_users_rejects_a_banned_phrase_in_how(tmp_path):
+    entry = {**GOOD, "name": "Pat", "how": "This is what keeps the boards apart."}
+    with pytest.raises(ValueError) as e:
+        load_users(write(tmp_path, [GOOD, entry]))
+    msg = str(e.value)
+    assert "entry 1" in msg and "This is what" in msg

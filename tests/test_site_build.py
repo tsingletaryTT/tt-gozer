@@ -15,7 +15,7 @@ import sys
 import pytest
 
 from site_build.afternoon import captions, contrast, facts
-from site_build.build import SWEEP
+from site_build.style import SWEEP
 from site_build.roster import load_users
 from site_build.transcripts import run_session
 

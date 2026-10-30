@@ -2,6 +2,8 @@
 # SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
 """Pins the shape of pyproject.toml, which Debian's pybuild reads to package gozer."""
 import os
+import re
+
 import pytest
 
 tomllib = pytest.importorskip("tomllib")
@@ -43,7 +45,6 @@ def test_requires_python_310():
 
 def test_setuptools_floor_is_old_enough_for_distro_packages():
     # Debian 12 ships setuptools 66.x, Ubuntu 24.04 68.x; the floor must not exceed 66.
-    import re
     (req,) = _load()["build-system"]["requires"]
     m = re.fullmatch(r"setuptools>=(\d+)(?:\.\d+)*", req)
     assert m and int(m.group(1)) <= 66
@@ -69,7 +70,6 @@ def test_entry_point_main_can_be_called_without_arguments(monkeypatch, capsys):
 def test_readme_states_the_minimum_python_from_pyproject():
     """The README's install section names the same minimum as requires-python."""
     import os
-    import re
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     with open(os.path.join(root, "pyproject.toml")) as fh:
         minimum = re.search(r'requires-python\s*=\s*">=\s*([0-9.]+)"', fh.read()).group(1)

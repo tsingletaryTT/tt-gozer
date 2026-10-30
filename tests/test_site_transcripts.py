@@ -6,6 +6,8 @@ import os
 import pwd
 import re
 
+import pytest
+
 from site_build import transcripts
 from site_build.transcripts import run_session, normalise
 
@@ -179,3 +181,13 @@ def test_the_current_user_name_never_appears(monkeypatch):
         for text in (s.command, s.output):
             assert "zz-test-user" not in text
             assert "ttuser" not in text
+
+
+def test_a_session_of_sixty_steps_is_refused():
+    # Step k's timestamps become 16:<k>:00, so k must fit in two digits of a
+    # minute field. Step 59 is the last that does.
+    session = transcripts._Session()
+    session.begin_step(59)
+    assert session.ts("x") == "2026-10-26T16:59:00Z"
+    with pytest.raises(ValueError, match="60"):
+        session.begin_step(60)

@@ -138,6 +138,19 @@ class _Session:
         # real events happened to share a wall-clock second.
         self.step = 0
 
+    # The index is the minute field of the fixed timestamp, so it must stay
+    # below 60. The walkthrough has far fewer steps; this makes a longer one
+    # fail loudly instead of producing a timestamp like 16:60:00.
+    MAX_STEPS = 60
+
+    def begin_step(self, k):
+        """Make step `k` the one whose timestamps are being normalised."""
+        if k >= self.MAX_STEPS:
+            raise ValueError(
+                f"the session has {k + 1} steps; timestamps use the step "
+                f"index as the minute, so at most {self.MAX_STEPS} are supported")
+        self.step = k
+
     def ts(self, _value):
         return f"2026-10-26T16:{self.step:02d}:00Z"
 
@@ -186,7 +199,7 @@ def _script():
 
     def step(argv, note_key, display=None):
         """Run argv; show `display` (default argv) as the typed command."""
-        _ACTIVE.step = len(steps)
+        _ACTIVE.begin_step(len(steps))
         code, out = _run(argv)
         shown = display if display is not None else argv
         steps.append(Step(

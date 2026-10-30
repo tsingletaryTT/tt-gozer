@@ -11,6 +11,7 @@ records. It lists agents by name and does not order them by usage.
 import json
 
 from site_build.afternoon import walk_waits
+from site_build.style import SWEEP
 
 USER_KEYS = {"name", "repo", "how", "evidence"}
 HOW_MAX = 140
@@ -62,6 +63,9 @@ def _check(i: int, u) -> None:
         bad(f"how is longer than {HOW_MAX} characters")
     if "\n" in u["how"]:
         bad("how contains a newline")
+    for phrase in SWEEP:
+        if phrase.lower() in u["how"].lower():
+            bad(f"how contains the banned phrase {phrase!r}")
     p = u["evidence"]
     if p.startswith("/") or ".." in p.split("/"):
         bad("evidence must be a relative path inside the repo (no leading slash, no ..)")
