@@ -1,4 +1,4 @@
-.TH GOZER 1 "October 2026" "tt\-gozer 0.3.9" "User Commands"
+.TH GOZER 1 "October 2026" "tt\-gozer 0.4.0" "User Commands"
 .SH NAME
 gozer \- cooperative Tenstorrent chip leasing
 .SH SYNOPSIS
@@ -20,7 +20,7 @@ Show who holds what and who is waiting. Read\-only: it never reaps or changes st
 Show the chips, the boards they sit on, and the lease grain.
 .TP
 .B acquire|summon --chips N|all|LO\-HI --who WHO [--reason R] [--exact X] [--fresh] [--expect D] [--ticket T] [--no\-queue] [--owner\-pid PID]
-Take a lease on N chips, or queue a ticket if none are free (exit 10). The lease is judged by open file descriptors: a standalone lease has a 900 second grace window, and --owner\-pid makes a supervisor's pid own it instead. --fresh requires chips a real reset marked clean. --no\-queue fails instead of queueing.
+Take a lease on N chips, or queue a ticket if none are free (exit 10). The lease is judged by open file descriptors: a standalone lease has a 900 second grace window, and --owner\-pid makes a supervisor's pid own it instead. --fresh requires chips a real reset marked clean. --no\-queue exits at once when no chips are free, without taking a ticket.
 .TP
 .B wait TICKET [--timeout D]
 Block until a queued ticket is granted. Bounded (8 minutes by default) so a loop is safe.
@@ -59,7 +59,7 @@ Acquire, run COMMAND, and always release. The release waits up to 10 seconds for
 Show who held what, when, and for how long. The last 20 events by default.
 .TP
 .B report [--out PATH] [--json]
-Regenerate the containment\-log page from history.jsonl. Never touches hardware.
+Regenerate the containment\-log page from history.jsonl. Inside a git checkout the default output is docs/log.html at the repository root; anywhere else --out PATH is required. Missing parent directories are created. Never touches hardware.
 .SH EXIT STATUS
 .TP
 .B 0

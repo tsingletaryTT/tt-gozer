@@ -583,21 +583,31 @@ def cmd_report(args) -> int:
         return EXIT_OK
 
     html = report.render(records, source_note=gk.history_root)
-    out_path = args.out or os.path.join(_repo_root(), "docs", "log.html")
+    if args.out:
+        out_path = args.out
+    else:
+        root = _repo_root()
+        if root is None:
+            print("gozer report: not inside a git checkout; pass --out PATH",
+                  file=sys.stderr)
+            return EXIT_UNAVAILABLE
+        out_path = os.path.join(root, "docs", "log.html")
+    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     with open(out_path, "w") as f:
         f.write(html)
     print(f"gozer report: wrote {out_path}")
     return EXIT_OK
 
 
-def _repo_root() -> str:
+def _repo_root() -> str | None:
+    """The git work tree containing the current directory, or None."""
+    import subprocess
     try:
-        import subprocess
         return subprocess.run(
             ["git", "rev-parse", "--show-toplevel"], capture_output=True,
-            text=True, check=True).stdout.strip()
+            text=True, check=True).stdout.strip() or None
     except (OSError, subprocess.CalledProcessError):
-        return os.getcwd()
+        return None
 
 
 def cmd_run(args) -> int:

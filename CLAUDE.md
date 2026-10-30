@@ -602,6 +602,10 @@ Decisions:
 * The site is a committed build (`docs/index.html`); CI runs `scripts/build_site.py --check`.
 * `gozer report` now writes `docs/log.html` so it no longer overwrites the site.
 * Version 0.4.0 is the first packaged release.
+* The September history archive stays in the repo for this project's own `docs/log.html` and is
+  not packaged, so another machine's `gozer report` contains only its own history.
+* `debian/control` sets `X-Python3-Version: >= 3.10` so the package cannot install where gozer
+  cannot import.
 
 Notable moments:
 * Building the .deb exposed `main(argv=None)`: the installed `/usr/bin/gozer` crashed on every

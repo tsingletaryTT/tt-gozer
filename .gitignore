@@ -11,3 +11,4 @@ debian/tt-gozer/
 debian/*.log
 build/
 *.egg-info
+docs/log.html

@@ -8,6 +8,7 @@ Every test runs with HOME pointed at a temp dir and an explicit --from so the
 real /usr/share and ~/.claude are never read or written.
 """
 import os
+import pytest
 import subprocess
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -105,7 +106,7 @@ def test_default_from_falls_back_to_repo_skills(tmp_path):
     # With no --from and no /usr/share/tt-gozer/skills, the script uses
     # <script dir>/../skills. Reached through a symlink, as ~/.local/bin does.
     if os.path.isdir("/usr/share/tt-gozer/skills"):
-        return  # the package is installed here; the fallback is not reachable
+        pytest.skip("the package is installed here; the fallback is not reachable")
     home = tmp_path / "home"
     (home / "bin").mkdir(parents=True)
     os.symlink(SCRIPT, home / "bin" / "gozer-install-skills")
@@ -116,3 +117,10 @@ def test_default_from_falls_back_to_repo_skills(tmp_path):
     for name in SKILLS:
         assert os.path.realpath(home / ".claude" / "skills" / name) == \
             os.path.realpath(os.path.join(REPO, "skills", name))
+
+
+def test_help_ends_with_a_complete_sentence():
+    r = subprocess.run([SCRIPT, "--help"], capture_output=True, text=True)
+    assert r.returncode == 0
+    last = r.stdout.rstrip("\n").splitlines()[-1]
+    assert last.endswith(".")

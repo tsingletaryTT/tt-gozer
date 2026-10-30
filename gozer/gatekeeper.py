@@ -70,6 +70,8 @@ MUTEX_STALE_SECONDS = 30
 # opened its device yet; reaping too late only delays the next tenant by the
 # same margin. This is separate from -- and never wired into -- `expect_done`,
 # which stays advisory and never reaps on its own (see the design spec).
+# This figure is also stated in debian/gozer.1 and README.md; a test checks the
+# man page. Change them together.
 DETACHED_GRACE_SECONDS = 900
 
 # Sentinel for release_unit's `expected_lease_id`, so that passing None

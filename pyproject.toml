@@ -26,4 +26,6 @@ version = { attr = "gozer.__version__" }
 include = ["gozer*"]
 
 [tool.setuptools.package-data]
-gozer = ["report_template.html", "history_archive.jsonl"]
+gozer = ["report_template.html"]
+# history_archive.jsonl stays in the repository for its own docs/log.html and is
+# not packaged: an installed `gozer report` shows only the local history.

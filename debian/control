@@ -8,6 +8,8 @@ Build-Depends: debhelper-compat (= 13),
                python3-all,
                python3-setuptools
 Standards-Version: 4.6.2
+# Keep equal to requires-python in pyproject.toml (a test checks).
+X-Python3-Version: >= 3.10
 Rules-Requires-Root: no
 Homepage: https://github.com/tsingletaryTT/tt-gozer
 

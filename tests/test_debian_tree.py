@@ -118,3 +118,29 @@ def test_install_file_places_units_under_usr_lib_systemd_user():
 def test_autopkgtest_is_declared():
     assert "Tests: smoke" in _read("tests", "control")
     assert os.access(os.path.join(DEB, "tests", "smoke"), os.X_OK)
+
+
+def test_man_page_th_line_matches_package_version():
+    th = _read("gozer.1").splitlines()[0]
+    assert th.startswith(".TH ")
+    assert __version__ in th.replace("\\-", "-")
+
+
+def test_source_stanza_pins_python_floor_to_pyproject():
+    import tomllib
+    with open(os.path.join(REPO, "pyproject.toml"), "rb") as f:
+        minimum = tomllib.load(f)["project"]["requires-python"].lstrip(">=")
+    source = _read("control").split("\n\n")[0]
+    m = re.search(r"^X-Python3-Version:\s*>=\s*([0-9.]+)\s*$", source, re.M)
+    assert m, "no X-Python3-Version in the source stanza"
+    assert m.group(1) == minimum
+
+
+def test_man_page_states_the_grace_window_from_the_code():
+    from gozer.gatekeeper import DETACHED_GRACE_SECONDS
+    assert str(DETACHED_GRACE_SECONDS) in _read("gozer.1")
+
+
+def test_man_page_report_entry_names_the_default_output():
+    man = _read("gozer.1").replace("\\-", "-")
+    assert "docs/log.html" in man and "--out" in man

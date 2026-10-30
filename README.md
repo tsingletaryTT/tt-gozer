@@ -162,7 +162,7 @@ $ gozer history -n 5
 | `env <lease>` | print export lines for a lease |
 | `run --chips N -- <command>` | acquire, run a command, always release. The release waits up to 10 s for the device to close (a fast-exiting command can leave a forked worker holding it for a moment) and refuses only if a process still holds it after that |
 | `history` [`-n N`] [`--json`] | who held what, when, for how long -- the last 20 events by default |
-| `report` [`--out PATH`] [`--json`] | regenerate the containment-log page (`docs/log.html` by default) from `history.jsonl` |
+| `report` [`--out PATH`] [`--json`] | regenerate the containment-log page (`docs/log.html` by default inside a git checkout; `--out` is needed elsewhere) from `history.jsonl` |
 
 Every command also accepts `--json` for machine-readable output.
 

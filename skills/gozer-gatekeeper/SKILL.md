@@ -15,8 +15,9 @@ gozer status
 ```
 
 Every chip is in exactly one of six states. **The table defining them lives in
-`~/code/tt-gozer/README.md`, under "How it decides what's free" — read it
-there.**
+the README, under "How it decides what's free" — read it there:
+`/usr/share/doc/tt-gozer/README.md.gz` when installed from the package, or the
+repository's `README.md`.**
 It is deliberately not duplicated here: this file is the copy an agent reads
 instead of the code, so it is the copy most likely to drift.
 

@@ -29,10 +29,12 @@ def test_only_the_gozer_package_ships():
     assert find["include"] == ["gozer*"]
 
 
-def test_report_template_and_archive_are_package_data():
+def test_report_template_is_package_data_and_the_archive_is_not():
+    # The September archive belongs to this repo's own docs/log.html. It is not
+    # shipped, so an installed `gozer report` shows only the local history.
     pkg_data = _load()["tool"]["setuptools"]["package-data"]["gozer"]
     assert "report_template.html" in pkg_data
-    assert "history_archive.jsonl" in pkg_data
+    assert "history_archive.jsonl" not in pkg_data
 
 
 def test_requires_python_310():

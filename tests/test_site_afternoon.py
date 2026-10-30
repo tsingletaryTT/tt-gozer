@@ -223,3 +223,11 @@ def test_release_without_lease_id_does_not_match_a_grant_without_lease_id():
     ev = [{"ts": "2026-10-26T17:00:00Z", "event": "granted", "who": "claude:a"},
           {"ts": "2026-10-26T21:00:00Z", "event": "released", "who": "claude:b", "duration_s": 5}]
     assert [e["event"] for e in extract(ev, START, END)] == ["granted"]
+
+
+def test_a_very_long_agent_name_cannot_overflow_its_block():
+    name = "claude:" + "x" * 300
+    out = lanes_html([g("2026-10-26T17:00:00Z", name, "x"), r("2026-10-26T18:00:00Z", name, "x", 3600)],
+                     START, END)
+    block = out.split('class="lease"')[1]
+    assert "overflow:hidden" in block and "white-space:nowrap" in block
