@@ -71,6 +71,34 @@ def _epoch(ts: str) -> int:
                .replace(tzinfo=timezone.utc).timestamp())
 
 
+def walk_waits(recs: list[dict]) -> tuple[list[dict], list[int]]:
+    """Waits and handoff gaps, walking time-sorted records once.
+
+    A wait runs from an agent's first queued event after its previous release
+    (or the start of the log) to its next grant. Returns the waits as
+    `{"who", "seconds"}` sorted by name, and the seconds between a release and
+    the next waiting agent's grant on the same chips. Shared with `roster`.
+    """
+    waiting: dict[str, str] = {}              # who -> ts of first unsatisfied queued
+    last_release: list[tuple[str, set]] = []  # (ts, chips) in order
+    gaps: list[int] = []
+    waits = []
+    for r in recs:
+        who = r["who"]
+        if r["event"] == "queued":
+            waiting.setdefault(who, r["ts"])
+        elif r["event"] == "released":
+            waiting.pop(who, None)
+            last_release.append((r["ts"], set(r.get("chips", []))))
+        elif r["event"] == "granted" and who in waiting:
+            waits.append({"who": who, "seconds": _epoch(r["ts"]) - _epoch(waiting.pop(who))})
+            chips = set(r.get("chips", []))
+            prior = [t for t, c in last_release if t <= r["ts"] and c & chips]
+            if prior:
+                gaps.append(_epoch(r["ts"]) - _epoch(max(prior)))
+    return sorted(waits, key=lambda w: (w["who"], w["seconds"])), gaps
+
+
 def facts(records: list[dict]) -> dict:
     """Numbers computed from the records only. Optional keys are absent when the data has none."""
     recs = sorted(records, key=lambda r: r["ts"])
@@ -92,25 +120,8 @@ def facts(records: list[dict]) -> dict:
         top = max(held, key=lambda r: r["duration_s"])
         out["longest_hold"] = {"who": top["who"], "seconds": int(top["duration_s"])}
 
-    # Waits and handoffs, walking the log once.
-    waiting: dict[str, str] = {}              # who -> ts of first unsatisfied queued
-    last_release: list[tuple[str, set]] = []  # (ts, chips) in order
-    gaps: list[int] = []
-    waits = []
-    for r in recs:
-        who = r["who"]
-        if r["event"] == "queued":
-            waiting.setdefault(who, r["ts"])
-        elif r["event"] == "released":
-            waiting.pop(who, None)
-            last_release.append((r["ts"], set(r.get("chips", []))))
-        elif r["event"] == "granted" and who in waiting:
-            waits.append({"who": who, "seconds": _epoch(r["ts"]) - _epoch(waiting.pop(who))})
-            chips = set(r.get("chips", []))
-            prior = [t for t, c in last_release if t <= r["ts"] and c & chips]
-            if prior:
-                gaps.append(_epoch(r["ts"]) - _epoch(max(prior)))
-    out["waits"] = sorted(waits, key=lambda w: (w["who"], w["seconds"]))
+    waits, gaps = walk_waits(recs)
+    out["waits"] = waits
     # Fastest handoff is the smallest gap above zero; gaps of zero are counted
     # separately as same-second handoffs.
     positive = [g for g in gaps if g > 0]

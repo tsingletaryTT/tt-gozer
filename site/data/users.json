@@ -1,0 +1,38 @@
+[
+  {
+    "name": "tensixinet",
+    "repo": "https://github.com/tsingletaryTT/tensixinet",
+    "how": "Plays chip telemetry as synthesizer sound; starts its audio worker with gozer run, which leases the chips and resets them on exit.",
+    "evidence": "tensixinet/media/chip.py"
+  },
+  {
+    "name": "tt-bio-demo",
+    "repo": "https://github.com/tsingletaryTT/tt-bio-demo",
+    "how": "Protein-folding demo; its hardware runner wraps each run in gozer run when gozer is installed.",
+    "evidence": "scripts/hw-run.sh"
+  },
+  {
+    "name": "tt-discolike",
+    "repo": "https://github.com/tsingletaryTT/tt-discolike",
+    "how": "Catalog and launcher for Gradio demo apps; shows live chip lease state from gozer status --json.",
+    "evidence": "discolike/gozer_status.py"
+  },
+  {
+    "name": "tt-orchard",
+    "repo": "https://github.com/tsingletaryTT/tt-orchard",
+    "how": "Harness that brings up new models; its lease adapter calls gozer acquire, reset, release and status for each board.",
+    "evidence": "orchard/adapters/gozer.py"
+  },
+  {
+    "name": "tt-station",
+    "repo": "https://github.com/tsingletaryTT/tt-station",
+    "how": "Mac client and box agent for serving models; the agent runs gozer acquire before it starts a server and releases it after.",
+    "evidence": "crates/tt-station-agentd/src/gozer.rs"
+  },
+  {
+    "name": "tt-tnt",
+    "repo": "https://github.com/tsingletaryTT/tt-tnt",
+    "how": "Llama-like model built for Tenstorrent hardware; its training demo script runs the trainer under gozer run.",
+    "evidence": "demo/run-training.sh"
+  }
+]
