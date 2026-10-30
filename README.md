@@ -44,7 +44,7 @@ systemctl --user enable --now gozer-reconcile.timer
 
 ### From a clone
 
-Requires Python 3.9+. Standard library only: no dependencies, no virtualenv.
+Requires Python 3.10+. Standard library only: no dependencies, no virtualenv.
 
 ```bash
 git clone https://github.com/tsingletaryTT/tt-gozer.git ~/code/tt-gozer

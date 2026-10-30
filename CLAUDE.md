@@ -606,7 +606,8 @@ Decisions:
 Notable moments:
 * Building the .deb exposed `main(argv=None)`: the installed `/usr/bin/gozer` crashed on every
   call. Fixed, with a test.
-* The Ubuntu 22.04 install test passed.
+* In local container runs (not on a GitHub runner), the .deb installed and the smoke script
+  passed on Debian 12, Ubuntu 22.04 and Ubuntu 24.04.
 * A first draft of the page claimed testing on three platforms that had not been run. The claim
   was removed and a test now forbids it.
 * The live-directory snapshot test was flaky because other agents write there.

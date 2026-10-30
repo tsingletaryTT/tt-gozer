@@ -62,3 +62,17 @@ def test_entry_point_main_can_be_called_without_arguments(monkeypatch, capsys):
         main()
     assert e.value.code == 0
     assert capsys.readouterr().out.startswith("gozer ")
+
+
+def test_readme_states_the_minimum_python_from_pyproject():
+    """The README's install section names the same minimum as requires-python."""
+    import os
+    import re
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root, "pyproject.toml")) as fh:
+        minimum = re.search(r'requires-python\s*=\s*">=\s*([0-9.]+)"', fh.read()).group(1)
+    with open(os.path.join(root, "README.md")) as fh:
+        readme = fh.read()
+    install = readme[readme.index("## Install"):readme.index("## For humans")]
+    claimed = re.findall(r"Python ([0-9]+\.[0-9]+)\+", install)
+    assert claimed == [minimum]
