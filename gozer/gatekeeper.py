@@ -200,14 +200,20 @@ class Gatekeeper:
         os.makedirs(mutex_dir, exist_ok=True)
         with contextlib.suppress(OSError):
             os.chmod(mutex_dir, 0o777)
+        # The history directory is best-effort in both branches: history.log
+        # already swallows OSError, so a history directory that cannot be made
+        # (read-only or full filesystem, a path under a regular file) only
+        # means no history is written. It must never stop the gate, or even
+        # `gozer release`, from working.
         if self._history_in_user_state_dir:
             # A private directory in the user's home: no sticky/world bits.
-            os.makedirs(self.history_root, exist_ok=True)
+            with contextlib.suppress(OSError):
+                os.makedirs(self.history_root, exist_ok=True)
         elif self.history_root != self.root:
-            first_history = not os.path.isdir(self.history_root)
-            os.makedirs(self.history_root, exist_ok=True)
-            if first_history:
-                with contextlib.suppress(OSError):
+            with contextlib.suppress(OSError):
+                first_history = not os.path.isdir(self.history_root)
+                os.makedirs(self.history_root, exist_ok=True)
+                if first_history:
                     os.chmod(self.history_root, 0o1777)
 
     def _gate_dir(self, unit_key: str) -> str:
