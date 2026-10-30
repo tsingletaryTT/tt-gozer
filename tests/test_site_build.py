@@ -256,3 +256,13 @@ def test_svg_diagram_is_labelled_and_large_enough(page):
     sizes = [float(x) for x in re.findall(r'font-size="([\d.]+)"', svg)]
     assert sizes and min(sizes) >= 14
     assert "http" not in svg.replace('xmlns="http://www.w3.org/2000/svg"', "")
+
+
+def test_grace_window_on_the_page_comes_from_the_constant(monkeypatch):
+    """The prose's grace figure is formatted from DETACHED_GRACE_SECONDS."""
+    from gozer import gatekeeper
+    from site_build.build import render
+    monkeypatch.setattr(gatekeeper, "DETACHED_GRACE_SECONDS", 600)
+    text = html.unescape(render())
+    assert "600 seconds (10 minutes)" in text
+    assert "900" not in _visible_prose(text)

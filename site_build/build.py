@@ -27,7 +27,7 @@ import os
 import re
 from string import Template
 
-from gozer import __version__
+from gozer import __version__, gatekeeper
 from site_build.afternoon import _epoch, captions, facts, lanes_html
 from site_build.roster import load_users, roster
 from site_build.transcripts import run_session
@@ -274,6 +274,15 @@ DIAGRAM = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 616" width
 </svg>"""
 
 
+def _grace_text() -> str:
+    """The detached-lease grace window, formatted from the constant the code uses."""
+    secs = gatekeeper.DETACHED_GRACE_SECONDS
+    mins = secs / 60
+    mins_txt = f"{int(mins)}" if mins == int(mins) else f"{mins:.1f}"
+    unit = "minute" if mins == 1 else "minutes"
+    return f"{secs} seconds ({mins_txt} {unit})"
+
+
 def render() -> str:
     """The whole page as a string."""
     records = _records()
@@ -282,6 +291,7 @@ def render() -> str:
     tokens = {
         "css": _read(STYLE),
         "version": esc(__version__),
+        "grace": _grace_text(),
         "steps": _steps_html(),
         "lanes": lanes,
         "legend": legend,

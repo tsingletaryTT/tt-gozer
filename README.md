@@ -16,7 +16,35 @@ tt-gozer makes "I am using this hardware now" a legible, checkable fact.
 
 ## Install
 
-Requires Python 3.9+. Standard library only — no dependencies, no virtualenv.
+Project page: <https://tsingletarytt.github.io/tt-gozer/>
+
+### From the Debian package
+
+Download `tt-gozer_<version>_all.deb` from the
+[GitHub releases page](https://github.com/tsingletaryTT/tt-gozer/releases), then:
+
+```bash
+sudo apt install ./tt-gozer_*_all.deb
+gozer-install-skills
+gozer status
+```
+
+The package installs `gozer` and `gozer-install-skills` under `/usr/bin`, the three skills under
+`/usr/share/tt-gozer/skills`, a man page, and this README. `gozer-install-skills` links the three
+skills into `~/.claude/skills/` for your user. Package installs run as root and cannot do that
+for you.
+
+The package ships the optional reconcile units, `gozer-reconcile.service` and
+`gozer-reconcile.timer`, in `/usr/lib/systemd/user`. It installs them and does not enable them.
+To turn them on for your user:
+
+```bash
+systemctl --user enable --now gozer-reconcile.timer
+```
+
+### From a clone
+
+Requires Python 3.9+. Standard library only: no dependencies, no virtualenv.
 
 ```bash
 git clone https://github.com/tsingletaryTT/tt-gozer.git ~/code/tt-gozer
@@ -28,21 +56,22 @@ The installer symlinks rather than copies, so `git pull` updates everything in p
 
 | What | Where | Why there |
 |---|---|---|
-| `bin/gozer` → `~/.local/bin/gozer` | your `PATH` | so any shell, script or agent can call it |
-| `skills/gozer-keymaster` → `~/.claude/skills/` | Claude Code skills dir | teaches agents to lease before they run |
-| `skills/gozer-gatekeeper` → `~/.claude/skills/` | same | teaches agents to diagnose a stuck gate |
+| `bin/gozer` -> `~/.local/bin/gozer` | your `PATH` | so any shell, script or agent can call it |
+| `skills/gozer-keymaster` -> `~/.claude/skills/` | Claude Code skills dir | teaches agents to lease before they run |
+| `skills/gozer-gatekeeper` -> `~/.claude/skills/` | same | teaches agents to diagnose a stuck gate |
 
-Skill directories are linked **individually**, never the parent — `~/.claude/skills/` usually
+Skill directories are linked **individually**, never the parent. `~/.claude/skills/` usually
 holds many unrelated skills and linking over it would clobber them.
 
-Lock state lives in `/tmp/tt-gozer/`, created on first use. Nothing needs root.
+Lock state lives in `/tmp/tt-gozer/`, created on first use. Nothing needs root. The history log
+(`history.jsonl`) defaults to `~/.local/state/tt-gozer/`.
 
 **Optional: periodic reconciliation.** Nothing reconciles unless a `gozer` command runs, so a
 crashed agent's lease can sit stale for hours if nobody happens to invoke gozer in the
-meantime — a real box hit this: a crashed lease's locks sat for over two hours because nothing
+meantime. A real box hit this: a crashed lease's locks sat for over two hours because nothing
 ran a gozer command. `contrib/gozer-reconcile.{service,timer}` run `gozer reconcile` every 5
 minutes as a systemd **user** unit, so the gate self-heals even between commands. The installer
-never enables this — it only prints the two commands, because enabling a systemd unit changes
+never enables this. It only prints the commands, because enabling a systemd unit changes
 your machine in a way you did not ask for:
 
 ```bash
@@ -52,10 +81,17 @@ ln -sfn ~/code/tt-gozer/contrib/gozer-reconcile.timer ~/.config/systemd/user/
 systemctl --user enable --now gozer-reconcile.timer
 ```
 
-The service is harmless if `gozer` is not installed or the sysfs topology is unreadable — it
+The service is harmless if `gozer` is not installed or the sysfs topology is unreadable. It
 checks for the binary first, swallows `gozer reconcile`'s own output, and never restarts on
 failure, so a broken box gets one quiet failed-unit transition per tick instead of a noisy
 journal.
+
+### Releases
+
+A tag named `v<version>` starts the release workflow in `.github/workflows/`. The workflow
+checks that the tag matches the package version, builds the `.deb`, lints it with lintian,
+install-tests it on Debian 12, Ubuntu 22.04 and Ubuntu 24.04, and publishes the release with
+the package attached. There is no apt repository; the package is a release asset.
 
 ## For humans
 

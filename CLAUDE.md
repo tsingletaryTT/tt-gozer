@@ -578,3 +578,42 @@ log (about 950 events) was still in `/tmp/tt-gozer` and would have gone at the n
   archive plus the live log, so the page now covers both, but the archive is not extended.
 
 TDD: `tests/test_default_history_dir.py` (7; red against the old default). Full suite 468.
+
+## Explainer site, Debian package and CI release (2026-10-30, 0.4.0)
+
+Prompt (summarised from the user): make the website an explainer of how gozer lets you, agents
+and apps work without re-implementing a chip "please and thank you" routine: queue, keep
+working, everyone gets a turn. "They just told the machine what to do, and it happened, often
+in parallel." Terminal-first with real examples; an example leaderboard shown as one person's
+experience; a final "who uses it" section; Debian packages built by CI; history in
+`~/.local/state/tt-gozer`.
+
+Decisions:
+* Page order is terminal first. Every session block is real CLI output generated at build time
+  (`site_build/transcripts.py`), and the grace-window figure in the prose is formatted from
+  `DETACHED_GRACE_SECONDS`.
+* The afternoon timeline comes from the real log (2026-10-26). No crash falls in that window,
+  and task text is dropped.
+* "Who uses it" lists public repos with code evidence. tt-rl is excluded at the user's request.
+  tt-local-generator is left out because its gozer code is only on an integration branch.
+* Package: native format, pybuild, `setuptools>=61`, the scripts `dh_python3` generates are
+  accepted, and the systemd units are installed and never enabled. `gozer-install-skills`
+  links the skills per user.
+* The site is a committed build (`docs/index.html`); CI runs `scripts/build_site.py --check`.
+* `gozer report` now writes `docs/log.html` so it no longer overwrites the site.
+* Version 0.4.0 is the first packaged release.
+
+Notable moments:
+* Building the .deb exposed `main(argv=None)`: the installed `/usr/bin/gozer` crashed on every
+  call. Fixed, with a test.
+* The Ubuntu 22.04 install test passed.
+* A first draft of the page claimed testing on three platforms that had not been run. The claim
+  was removed and a test now forbids it.
+* The live-directory snapshot test was flaky because other agents write there.
+
+Not proven:
+* The GitHub workflows (`ci.yml`, `release.yml`) have never run on GitHub. The first push runs
+  them.
+* The .deb is untested on real hardware.
+* No apt repository exists. The package is a release asset.
+* `reset-all` is still unproven on hardware.
