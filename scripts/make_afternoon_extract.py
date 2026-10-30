@@ -26,7 +26,7 @@ def main() -> int:
     with open(a.source) as fh:
         events = [json.loads(l) for l in fh if l.strip()]
     recs = extract(events, START, END)
-    os.makedirs(os.path.dirname(a.out), exist_ok=True)
+    os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
     with open(a.out, "w") as fh:
         for r in recs:
             fh.write(json.dumps(r, sort_keys=True) + "\n")
