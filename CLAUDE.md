@@ -622,3 +622,25 @@ Not proven:
 * The .deb is untested on real hardware.
 * No apt repository exists. The package is a release asset.
 * `reset-all` is still unproven on hardware.
+
+### Installing in the QB2 image (2026-10-30, after the PR was open)
+
+Prompt: "can you try installing the debian files and trying the install helpers out in
+~/code/tt-developer-image qb2?" Built the 0.4.0 package in Debian 12 (lintian clean) and installed it
+in a throwaway container from `tenstorrent/qb2-env:latest` (user ttuser, Ubuntu 24.04, no
+`/dev/tenstorrent` passed; leases tested on a fake box only, because a container keeps its own gate
+and cannot see host processes).
+
+* Worked: `apt-get install`, `gozer --version`, `gozer-install-skills` from a fresh account with no
+  `~/.claude`, a second run, the real-directory refusal, `debian/tests/smoke`, read-only `status` and
+  `topology` against the real sysfs, `apt remove`. Nothing under `$HOME` was touched by the install.
+* Found: `Recommends: tt-smi` made `apt install ./tt-gozer.deb` pull the apt `tt-smi` 5.0.1 and about
+  thirty Python packages, next to the 6.1.0 `tt-smi` the QB2 already has in `~/.tenstorrent-venv`.
+  Changed to `Suggests: tt-smi` (test pins both halves), README says a `tt-smi` must be on the PATH for
+  resets. Overturns the spec's "Recommends".
+* Found, not changed: the image excludes man pages from installs (`path-exclude=/usr/share/man/*`), so
+  `man gozer` could not be tried there; its apt lists are stale until `apt-get update`; inside a
+  container gozer reads the host's sysfs but only the container's processes, so it reports host-held
+  chips as FREE (README now says to run gozer on the host).
+* Dropping the deb into `tt-developer-image/docker/debs/` would make `Dockerfile.qb2` step 7 install
+  every deb there and skip the apt install of tt-toplike; not done.

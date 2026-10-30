@@ -16,7 +16,7 @@ Homepage: https://github.com/tsingletaryTT/tt-gozer
 Package: tt-gozer
 Architecture: all
 Depends: ${python3:Depends}, ${misc:Depends}
-Recommends: tt-smi
+Suggests: tt-smi
 Description: cooperative Tenstorrent chip leasing for shared boxes
  gozer lets several agents and people share one machine with Tenstorrent
  accelerators. A workload takes a lease on one or more boards before it opens

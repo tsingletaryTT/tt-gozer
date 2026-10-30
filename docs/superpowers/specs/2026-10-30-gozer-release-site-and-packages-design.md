@@ -138,8 +138,10 @@ The person using it tells the machine what to do and it happens, often in parall
     cannot do this for each user, and must not touch home directories);
   * the reconcile service and timer under `/usr/share/tt-gozer/contrib` (not enabled);
   * the README and licence under `/usr/share/doc/tt-gozer`.
-* Depends on the Python interpreter only (`${python3:Depends}`). Recommends `tt-smi`; resets
-  need it and leases do not.
+* Depends on the Python interpreter only (`${python3:Depends}`). Suggests `tt-smi`; resets
+  need one on the PATH and leases do not. It is a Suggests, because on a QB2 a Recommends makes
+  apt install the older apt `tt-smi` and about thirty Python packages next to the `tt-smi` the
+  tt-installer already put in a venv (found by installing the package in the qb2 image).
   Version comes from `gozer.__version__`.
 * CI builds it with GitHub Actions on every tag `v*`. The workflow creates the GitHub release
   and attaches the file. It fails at once if the tag is not `v` plus `gozer.__version__`. It

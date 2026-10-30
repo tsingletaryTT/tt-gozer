@@ -42,6 +42,15 @@ To turn them on for your user:
 systemctl --user enable --now gozer-reconcile.timer
 ```
 
+Resets (`gozer release`, `reset`, `reset-all`) run `tt-smi`, so one has to be on your PATH. The
+package only suggests it. A QB2 already has `tt-smi` in the venv that `tt-installer` created, and
+`apt` would otherwise install an older copy beside it.
+
+Run gozer on the host. Inside a container it can read the host's `/sys/class/tenstorrent`, but
+it only sees the container's own processes and keeps its lease records inside the container. It
+would report chips as free that a process on the host holds, and agents on the host would not see
+its leases.
+
 ### From a clone
 
 Requires Python 3.10+. Standard library only: no dependencies, no virtualenv.

@@ -47,7 +47,11 @@ def test_control_fields():
     for dep in ("debhelper-compat (= 13)", "dh-python", "pybuild-plugin-pyproject"):
         assert dep in f["Build-Depends"]
     assert "${python3:Depends}" in f["Depends"]
-    assert "tt-smi" in f["Recommends"]
+    # tt-smi is only suggested. A QB2 already has its own tt-smi in a venv, and
+    # a Recommends makes apt install the older apt tt-smi and about thirty
+    # Python packages next to it.
+    assert "tt-smi" in f["Suggests"]
+    assert "tt-smi" not in f.get("Recommends", "")
     assert f["Standards-Version"]
     assert f["Homepage"]
     assert "tsingletary@tenstorrent.com" in f["Maintainer"]
