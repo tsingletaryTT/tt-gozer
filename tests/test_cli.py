@@ -608,6 +608,28 @@ def test_report_writes_html_to_out_path(env, capsys, tmp_path):
     assert "{{" not in html
 
 
+def test_report_default_output_is_docs_log_html(env, capsys, monkeypatch):
+    """`gozer report` must not overwrite docs/index.html (the explainer site).
+
+    Runs from a throwaway git repo so the real repo's docs/ is never touched.
+    """
+    import subprocess
+
+    repo = env / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    monkeypatch.chdir(repo)
+    (repo / "docs").mkdir()
+
+    _, acq_out = run(["acquire", "--chips", "1", "--who", "claude:x", "--json"], capsys)
+    run(["release", json.loads(acq_out)["lease_id"]], capsys)
+
+    code, _ = run(["report"], capsys)
+    assert code == 0
+    assert (repo / "docs" / "log.html").exists()
+    assert not (repo / "docs" / "index.html").exists()
+
+
 def test_report_refuses_when_archive_and_history_are_both_empty(env, capsys, monkeypatch):
     from gozer import report
 
@@ -619,3 +641,43 @@ def test_report_refuses_when_archive_and_history_are_both_empty(env, capsys, mon
 def test_report_does_not_refuse_on_empty_history_when_archive_has_events(env, capsys):
     code, out = run(["report", "--json"], capsys)
     assert code == 0  # the checked-in archive alone is enough to report on
+
+
+def test_report_outside_a_git_checkout_asks_for_out(env, capsys, monkeypatch, tmp_path):
+    _, acq_out = run(["acquire", "--chips", "1", "--who", "claude:x", "--json"], capsys)
+    run(["release", json.loads(acq_out)["lease_id"]], capsys)
+    plain = tmp_path / "not-a-repo"
+    plain.mkdir()
+    monkeypatch.chdir(plain)
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
+    code = main(["report"])
+    err = capsys.readouterr().err
+    assert code == 12  # EXIT_UNAVAILABLE
+    assert "--out" in err and "git checkout" in err
+    assert "Traceback" not in err
+    assert not (plain / "docs").exists()
+
+
+def test_report_out_creates_missing_parent_directories(env, capsys, tmp_path):
+    _, acq_out = run(["acquire", "--chips", "1", "--who", "claude:x", "--json"], capsys)
+    run(["release", json.loads(acq_out)["lease_id"]], capsys)
+    target = tmp_path / "sub" / "dir" / "x.html"
+    code, _ = run(["report", "--out", str(target)], capsys)
+    assert code == 0
+    assert target.exists()
+
+
+def test_report_without_the_archive_shows_only_local_agents(env, capsys, monkeypatch):
+    from gozer import report
+    monkeypatch.setattr(report, "load_archive", lambda: [])
+    _, acq_out = run(["acquire", "--chips", "1", "--who", "claude:only-me", "--json"], capsys)
+    run(["release", json.loads(acq_out)["lease_id"]], capsys)
+    code, out = run(["report", "--json"], capsys)
+    assert code == 0
+    assert {r["who"] for r in json.loads(out)["roster"]} == {"claude:only-me"}
+
+
+def test_report_with_no_archive_file_on_disk_loads_nothing(monkeypatch, tmp_path):
+    from gozer import report
+    monkeypatch.setattr(report, "_ARCHIVE_PATH", str(tmp_path / "missing.jsonl"))
+    assert report.load_archive() == []

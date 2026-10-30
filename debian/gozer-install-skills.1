@@ -1,0 +1,17 @@
+.TH GOZER-INSTALL-SKILLS 1 "October 2026" "tt-gozer" "User Commands"
+.SH NAME
+gozer\-install\-skills \- link the gozer Claude Code skills into your skills directory
+.SH SYNOPSIS
+.B gozer\-install\-skills
+[\fB\-\-from\fR \fIDIR\fR] [\fB\-\-to\fR \fIDIR\fR]
+.SH DESCRIPTION
+The tt\-gozer package installs three Claude Code skills (gozer\-keymaster, gozer\-gatekeeper and gozer\-park) read\-only under /usr/share/tt\-gozer/skills. A package cannot touch each user's home directory, so this command links them into the skills directory of the user who runs it. Running it again changes nothing. It refuses to replace a real directory it did not create.
+.SH OPTIONS
+.TP
+.BI \-\-from " DIR"
+Where the skills live. Default: /usr/share/tt\-gozer/skills, else the skills directory of the git checkout the script was run from.
+.TP
+.BI \-\-to " DIR"
+Where to link them. Default: $HOME/.claude/skills.
+.SH SEE ALSO
+.BR gozer (1)

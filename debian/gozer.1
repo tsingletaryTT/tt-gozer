@@ -1,0 +1,136 @@
+.TH GOZER 1 "October 2026" "tt\-gozer 0.4.0" "User Commands"
+.SH NAME
+gozer \- cooperative Tenstorrent chip leasing
+.SH SYNOPSIS
+.B gozer
+[\fB\-\-version\fR] \fICOMMAND\fR [\fB\-\-json\fR] [\fIOPTIONS\fR]
+.SH DESCRIPTION
+.B gozer
+lets several agents and people share one box with Tenstorrent accelerators. A workload takes a lease on a board before it opens /dev/tenstorrent/*, and releases it afterwards. A lease is checked against the open file descriptors of real processes, so a crashed workload does not hold a board for ever. On a board that holds two chips or fewer the lease covers the whole board, so asking for one chip may grant two.
+.PP
+Every command accepts
+.B \-\-json
+for machine\-readable output.
+.SH COMMANDS
+.TP
+.B status [--json]
+Show who holds what and who is waiting. Read\-only: it never reaps or changes state.
+.TP
+.B topology [--json]
+Show the chips, the boards they sit on, and the lease grain.
+.TP
+.B acquire|summon --chips N|all|LO\-HI --who WHO [--reason R] [--exact X] [--fresh] [--expect D] [--ticket T] [--no\-queue] [--owner\-pid PID]
+Take a lease on N chips, or queue a ticket if none are free (exit 10). The lease is judged by open file descriptors: a standalone lease has a 900 second grace window, and --owner\-pid makes a supervisor's pid own it instead. --fresh requires chips a real reset marked clean. --no\-queue exits at once when no chips are free, without taking a ticket.
+.TP
+.B wait TICKET [--timeout D]
+Block until a queued ticket is granted. Bounded (8 minutes by default) so a loop is safe.
+.TP
+.B queue [--json]
+List waiting requests.
+.TP
+.B cancel TICKET
+Drop a queue ticket.
+.TP
+.B renew LEASE [--expect D]
+Restart a detached lease's grace window. --expect also extends the advisory deadline.
+.TP
+.B release|banish LEASE [--no\-reset] [--force]
+Give the chips back and reset them with tt\-smi. A reset opens every device on the box for about 42 seconds.
+.TP
+.B reset LEASE [--force]
+Reset the lease's chips in place and keep the lease. Refuses while one of your own processes holds a device open.
+.TP
+.B reset\-all --who WHO [--reason R]
+Host\-wide tt\-smi \-r all under a lease on every unit. It never queues: it refuses unless the whole box is free.
+.TP
+.B reconcile [--sudo]
+Re\-derive state from kernel truth and reap leases whose owner is gone. --sudo also checks other users' processes.
+.TP
+.B adopt TARGET --who WHO [--reason R]
+Wrap a lease around untracked running work.
+.TP
+.B env LEASE
+Print the export lines for a lease.
+.TP
+.B run [--chips N] [--who W] [--reason R] [--exact X] [--fresh] [--expect D] \-\- COMMAND...
+Acquire, run COMMAND, and always release. The release waits up to 10 seconds for the device to close.
+.TP
+.B history [\-n N] [--json]
+Show who held what, when, and for how long. The last 20 events by default.
+.TP
+.B report [--out PATH] [--json]
+Regenerate the containment\-log page from history.jsonl. Inside a git checkout the default output is docs/log.html at the repository root; anywhere else --out PATH is required. Missing parent directories are created. Never touches hardware.
+.SH EXIT STATUS
+.TP
+.B 0
+granted / success
+.TP
+.B 10
+queued \(em a ticket is on stdout
+.TP
+.B 11
+wait timed out, still queued
+.TP
+.B 12
+unavailable and queueing disabled
+.TP
+.B 13
+no such lease or ticket
+.TP
+.B 14
+topology unreadable
+.TP
+.B 15
+release or reset refused, nothing done \(em a device is still open, or the lease's units now belong to someone else; for reset also a lease record that disagrees with its units, or has no units or chips, or a malformed chip id
+.TP
+.B 16
+the allocator mutex is stuck; the message names the path to clear
+.TP
+.B 17
+reset ran tt\-smi and it failed; the lease is still held
+.TP
+.B 18
+reset ran, and afterwards the lease was gone or another lease held its chips; the reset may have hit chips that were no longer yours
+.TP
+.B 19
+release tore the lease down but its reset failed; the units are not marked clean (so \-\-fresh refuses them) and the chips may be unreadable until reset. The output, and recovery in \-\-json, give the commands. Before 0.3.5 this exited 0
+.TP
+.B 20
+reset\-all ran tt\-smi and it succeeded, but some chips still read all ones; gozer has nothing further to try, so a human must power\-cycle the box or reseat the card
+.TP
+.B 130
+gozer run was interrupted by a signal (128 + SIGINT); the lease was still released
+.SH FILES
+.TP
+.I $GOZER_ROOT
+Lease state: gate, leases, queue and mutex directories. Default /tmp/tt\-gozer. It is lost on reboot on purpose, because a reboot resets the chips.
+.TP
+.I $GOZER_HISTORY_ROOT/history.jsonl
+Append\-only log of every grant, release, reap and refusal. Default ~/.local/state/tt\-gozer (or $XDG_STATE_HOME/tt\-gozer).
+.TP
+.I /usr/share/tt\-gozer/skills
+The Claude Code skills. gozer\-install\-skills links them into ~/.claude/skills.
+.TP
+.I /usr/lib/systemd/user/gozer\-reconcile.{service,timer}
+Optional user units that run gozer reconcile every five minutes. The package never enables them.
+.SH ENVIRONMENT
+.TP
+.B GOZER_ROOT
+Directory for lease state.
+.TP
+.B GOZER_HISTORY_ROOT
+Directory for history.jsonl.
+.TP
+.B GOZER_SYSFS_ROOT
+Where to read the chips from. Default /sys/class/tenstorrent. Meant for tests.
+.TP
+.B GOZER_PROC_ROOT
+Where to scan for open devices. Default /proc. Meant for tests.
+.TP
+.B GOZER_RESET_CMD
+The reset program. Default tt\-smi.
+.SH SEE ALSO
+.BR tt\-smi (1),
+.BR gozer\-install\-skills (1)
+.PP
+https://github.com/tsingletaryTT/tt\-gozer

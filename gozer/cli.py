@@ -583,21 +583,31 @@ def cmd_report(args) -> int:
         return EXIT_OK
 
     html = report.render(records, source_note=gk.history_root)
-    out_path = args.out or os.path.join(_repo_root(), "docs", "index.html")
+    if args.out:
+        out_path = args.out
+    else:
+        root = _repo_root()
+        if root is None:
+            print("gozer report: not inside a git checkout; pass --out PATH",
+                  file=sys.stderr)
+            return EXIT_UNAVAILABLE
+        out_path = os.path.join(root, "docs", "log.html")
+    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     with open(out_path, "w") as f:
         f.write(html)
     print(f"gozer report: wrote {out_path}")
     return EXIT_OK
 
 
-def _repo_root() -> str:
+def _repo_root() -> str | None:
+    """The git work tree containing the current directory, or None."""
+    import subprocess
     try:
-        import subprocess
         return subprocess.run(
             ["git", "rev-parse", "--show-toplevel"], capture_output=True,
-            text=True, check=True).stdout.strip()
+            text=True, check=True).stdout.strip() or None
     except (OSError, subprocess.CalledProcessError):
-        return os.getcwd()
+        return None
 
 
 def cmd_run(args) -> int:
@@ -715,9 +725,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="how many recent events to show (default 20)")
 
     rp = add("report", cmd_report, "regenerate the containment-log page "
-                                   "(docs/index.html) from history.jsonl")
+                                   "(docs/log.html) from history.jsonl")
     rp.add_argument("--out", default=None,
-                    help="output path (default: docs/index.html at the repo root)")
+                    help="output path (default: docs/log.html at the repo root)")
 
     rn = add("run", cmd_run, "acquire, run a command, always release")
     rn.add_argument("--chips", default="1")
@@ -731,7 +741,9 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def main(argv: list[str]) -> int:
+def main(argv: list[str] | None = None) -> int:
+    # argv defaults to sys.argv[1:] because the console script that setuptools
+    # generates (and so the Debian package) calls main() with no arguments.
     args = build_parser().parse_args(argv)
     if getattr(args, "command", None) and args.command and args.command[0] == "--":
         args.command = args.command[1:]

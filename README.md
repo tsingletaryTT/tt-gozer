@@ -16,7 +16,44 @@ tt-gozer makes "I am using this hardware now" a legible, checkable fact.
 
 ## Install
 
-Requires Python 3.9+. Standard library only — no dependencies, no virtualenv.
+Project page: <https://tsingletarytt.github.io/tt-gozer/>
+
+### From the Debian package
+
+Download `tt-gozer_<version>_all.deb` from the
+[GitHub releases page](https://github.com/tsingletaryTT/tt-gozer/releases), then:
+
+```bash
+sudo apt install ./tt-gozer_*_all.deb
+gozer-install-skills
+gozer status
+```
+
+The package installs `gozer` and `gozer-install-skills` under `/usr/bin`, the three skills under
+`/usr/share/tt-gozer/skills`, a man page, and this README. `gozer-install-skills` links the three
+skills into `~/.claude/skills/` for your user. Package installs run as root and cannot do that
+for you.
+
+The package ships the optional reconcile units, `gozer-reconcile.service` and
+`gozer-reconcile.timer`, in `/usr/lib/systemd/user`. It installs them and does not enable them.
+To turn them on for your user:
+
+```bash
+systemctl --user enable --now gozer-reconcile.timer
+```
+
+Resets (`gozer release`, `reset`, `reset-all`) run `tt-smi`, so one has to be on your PATH. The
+package only suggests it. A QB2 already has `tt-smi` in the venv that `tt-installer` created, and
+`apt` would otherwise install an older copy beside it.
+
+Run gozer on the host. Inside a container it can read the host's `/sys/class/tenstorrent`, but
+it only sees the container's own processes and keeps its lease records inside the container. It
+would report chips as free that a process on the host holds, and agents on the host would not see
+its leases.
+
+### From a clone
+
+Requires Python 3.10+. Standard library only: no dependencies, no virtualenv.
 
 ```bash
 git clone https://github.com/tsingletaryTT/tt-gozer.git ~/code/tt-gozer
@@ -28,21 +65,22 @@ The installer symlinks rather than copies, so `git pull` updates everything in p
 
 | What | Where | Why there |
 |---|---|---|
-| `bin/gozer` → `~/.local/bin/gozer` | your `PATH` | so any shell, script or agent can call it |
-| `skills/gozer-keymaster` → `~/.claude/skills/` | Claude Code skills dir | teaches agents to lease before they run |
-| `skills/gozer-gatekeeper` → `~/.claude/skills/` | same | teaches agents to diagnose a stuck gate |
+| `bin/gozer` -> `~/.local/bin/gozer` | your `PATH` | so any shell, script or agent can call it |
+| `skills/gozer-keymaster` -> `~/.claude/skills/` | Claude Code skills dir | teaches agents to lease before they run |
+| `skills/gozer-gatekeeper` -> `~/.claude/skills/` | same | teaches agents to diagnose a stuck gate |
 
-Skill directories are linked **individually**, never the parent — `~/.claude/skills/` usually
+Skill directories are linked **individually**, never the parent. `~/.claude/skills/` usually
 holds many unrelated skills and linking over it would clobber them.
 
-Lock state lives in `/tmp/tt-gozer/`, created on first use. Nothing needs root.
+Lock state lives in `/tmp/tt-gozer/`, created on first use. Nothing needs root. The history log
+(`history.jsonl`) defaults to `~/.local/state/tt-gozer/`.
 
 **Optional: periodic reconciliation.** Nothing reconciles unless a `gozer` command runs, so a
 crashed agent's lease can sit stale for hours if nobody happens to invoke gozer in the
-meantime — a real box hit this: a crashed lease's locks sat for over two hours because nothing
+meantime. A real box hit this: a crashed lease's locks sat for over two hours because nothing
 ran a gozer command. `contrib/gozer-reconcile.{service,timer}` run `gozer reconcile` every 5
 minutes as a systemd **user** unit, so the gate self-heals even between commands. The installer
-never enables this — it only prints the two commands, because enabling a systemd unit changes
+never enables this. It only prints the commands, because enabling a systemd unit changes
 your machine in a way you did not ask for:
 
 ```bash
@@ -52,10 +90,17 @@ ln -sfn ~/code/tt-gozer/contrib/gozer-reconcile.timer ~/.config/systemd/user/
 systemctl --user enable --now gozer-reconcile.timer
 ```
 
-The service is harmless if `gozer` is not installed or the sysfs topology is unreadable — it
+The service is harmless if `gozer` is not installed or the sysfs topology is unreadable. It
 checks for the binary first, swallows `gozer reconcile`'s own output, and never restarts on
 failure, so a broken box gets one quiet failed-unit transition per tick instead of a noisy
 journal.
+
+### Releases
+
+A tag named `v<version>` starts the release workflow in `.github/workflows/`. The workflow
+checks that the tag matches the package version, builds the `.deb`, lints it with lintian,
+install-tests it on Debian 12, Ubuntu 22.04 and Ubuntu 24.04, and publishes the release with
+the package attached. There is no apt repository; the package is a release asset.
 
 ## For humans
 
@@ -126,14 +171,16 @@ $ gozer history -n 5
 | `env <lease>` | print export lines for a lease |
 | `run --chips N -- <command>` | acquire, run a command, always release. The release waits up to 10 s for the device to close (a fast-exiting command can leave a forked worker holding it for a moment) and refuses only if a process still holds it after that |
 | `history` [`-n N`] [`--json`] | who held what, when, for how long -- the last 20 events by default |
-| `report` [`--out PATH`] [`--json`] | regenerate the GH Pages containment-log page from `history.jsonl` |
+| `report` [`--out PATH`] [`--json`] | regenerate the containment-log page (`docs/log.html` by default inside a git checkout; `--out` is needed elsewhere) from `history.jsonl` |
 
 Every command also accepts `--json` for machine-readable output.
 
-`gozer report` turns the whole history log into `docs/index.html` -- the published
-"Containment Log" microsite -- recomputing every roster stat, hero number, and board/chip
-mapping from the live log instead of anyone hand-typing them. It never touches hardware; run it
-and commit `docs/index.html` whenever you want the published page current. `--json` prints the
+`gozer report` turns the whole history log into `docs/log.html` -- the old "Containment Log"
+page, which the site no longer links to -- recomputing every roster stat, hero number, and board/chip
+mapping from the live log instead of anyone hand-typing them. It never touches hardware. Inside a
+git checkout it writes `docs/log.html`; that file is generated, is listed in `.gitignore` and is not
+committed. `--out` writes it somewhere else. `docs/index.html` is a different
+page: the explainer, built by `scripts/build_site.py`, and `gozer report` never writes it. `--json` prints the
 same computed stats without rendering HTML, for scripting.
 
 ## For agents
@@ -288,7 +335,7 @@ they read the output. If `status` shows `STALE`, run `gozer reconcile` to clear 
   queue/<seq>-<ticket>.json      FIFO, zero-padded seq
   queue/.claim-window            ticket entitled to claim, 90s expiry
   mutex/.gatekeeper.lock/        allocator mutex, self-heals after 30s
-  history.jsonl                  append-only log: granted, queued, released,
+  history.jsonl                  (in ~/.local/state/tt-gozer by default) append-only log: granted, queued, released,
                                   reset, reaped, adopted, refused -- one JSON object
                                   per line, forever (see below)
 ```
@@ -299,12 +346,13 @@ All plain files. Inspect with `ls` and `cat`; recover by hand if you ever need t
 only place `gozer` remembers anything past-tense. Everything else in this state directory is
 present-tense and vanishes the moment a lease is released or reaped, which is exactly why
 `gozer history` exists -- to answer "who had the chips two hours ago" after the gate itself has
-already forgotten. By default it lives right alongside the rest of `/tmp/tt-gozer` and does not
-survive a reboot -- leases/gate/queue *should* vanish on reboot (the chips get reset), and until
-2026-09-10 the history log inherited that fate too, purely as a side effect of sharing a
-directory with them. Set `GOZER_HISTORY_ROOT` to a path outside `/tmp` (e.g.
-`~/.local/state/tt-gozer`) to keep the audit trail across reboots while leases/gate/queue stay
-ephemeral under `GOZER_ROOT` as before; leave it unset and nothing changes. Each line is written
+already forgotten. By default it lives in `~/.local/state/tt-gozer` (or
+`$XDG_STATE_HOME/tt-gozer`) and survives a reboot, while leases/gate/queue stay ephemeral under
+`/tmp/tt-gozer` (they *should* vanish on reboot, since the chips get reset). Before 0.3.9 the
+log lived under `/tmp` with them and was lost at every reboot. If you name a root yourself
+(`GOZER_ROOT`), the log stays beside it; `GOZER_HISTORY_ROOT` overrides both. The default is per
+user: on a box with several users each sees the commands they ran, so point everyone's
+`GOZER_HISTORY_ROOT` at one shared directory for a single timeline. Each line is written
 with a single `write()` call on a file opened `O_APPEND`, which is atomic on Linux for writes
 under `PIPE_BUF` (4096 bytes), so concurrent agents logging at the same moment cannot interleave
 a torn line. Logging is best-effort: a full disk or a permissions problem is swallowed rather

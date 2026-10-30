@@ -555,3 +555,92 @@ Prompt: "yes do them please", for items 2 and 4 of the tt-orchard relay (items 3
 TDD: `tests/test_renew_heartbeat.py` (9), `tests/test_orphan_holders.py` (11), red before; 4
 mutations (grace ignores renewed_at, owner_dead always False, no reconcile warning, renew skips the
 gate copy) all red. Full suite 461.
+
+## history.jsonl gets a durable default (2026-10-30, 0.3.9)
+
+Prompt: while planning the release site, the user noted "we were supposed to be using a more perm
+log spot", then "let's make a ~/.local log dir for gozer". The 2026-09-10 entry added
+`GOZER_HISTORY_ROOT` but never set it anywhere (the 2026-09-21 entry says so), so the 2026-10-22..30
+log (about 950 events) was still in `/tmp/tt-gozer` and would have gone at the next reboot.
+
+* With no `root` argument, no `GOZER_ROOT` and no `GOZER_HISTORY_ROOT`, `Gatekeeper.history_root` is
+  `$XDG_STATE_HOME/tt-gozer`, else `~/.local/state/tt-gozer` (created without the sticky/world-writable
+  bits the gate dirs get). A named root, by argument or `GOZER_ROOT`, keeps history beside it, so
+  tests and custom setups behave as before; `GOZER_HISTORY_ROOT` still overrides both.
+* This overturns a line in `gozer/history.py` that said the log should not be a per-user path, to keep
+  one timeline across users. It is per user now, as asked; every agent on this box runs as one user, so
+  nothing fragments here. A multi-user box points `GOZER_HISTORY_ROOT` at a shared directory.
+* Migrated by hand: merged `/tmp/tt-gozer/history.jsonl` into `~/.local/state/tt-gozer/history.jsonl`
+  (de-duplicated on ts, event, lease, ticket, who: 956 events, 2026-10-22 to 30), and kept an untouched
+  copy as `history-backup-2026-10-30.jsonl`. No migration code: the live `bin/gozer` of this checkout is what every
+  agent runs, so the switch took effect for all of them as soon as the change was in the tree.
+* Not done: `history_archive.jsonl` in the repo still ends at 2026-09-10. `gozer report` reads the
+  archive plus the live log, so the page now covers both, but the archive is not extended.
+
+TDD: `tests/test_default_history_dir.py` (7; red against the old default). Full suite 468.
+
+## Explainer site, Debian package and CI release (2026-10-30, 0.4.0)
+
+Prompt (summarised from the user): make the website an explainer of how gozer lets you, agents
+and apps work without re-implementing a chip "please and thank you" routine: queue, keep
+working, everyone gets a turn. "They just told the machine what to do, and it happened, often
+in parallel." Terminal-first with real examples; an example leaderboard shown as one person's
+experience; a final "who uses it" section; Debian packages built by CI; history in
+`~/.local/state/tt-gozer`.
+
+Decisions:
+* Page order is terminal first. Every session block is real CLI output generated at build time
+  (`site_build/transcripts.py`), and the grace-window figure in the prose is formatted from
+  `DETACHED_GRACE_SECONDS`.
+* The afternoon timeline comes from the real log (2026-10-26). No crash falls in that window,
+  and task text is dropped.
+* "Who uses it" lists public repos with code evidence. tt-rl is excluded at the user's request.
+  tt-local-generator is left out because its gozer code is only on an integration branch.
+* Package: native format, pybuild, `setuptools>=61`, the scripts `dh_python3` generates are
+  accepted, and the systemd units are installed and never enabled. `gozer-install-skills`
+  links the skills per user.
+* The site is a committed build (`docs/index.html`); CI runs `scripts/build_site.py --check`.
+* `gozer report` now writes `docs/log.html` so it no longer overwrites the site.
+* Version 0.4.0 is the first packaged release.
+* The September history archive stays in the repo for this project's own `docs/log.html` and is
+  not packaged, so another machine's `gozer report` contains only its own history.
+* `debian/control` sets `X-Python3-Version: >= 3.10` so the package cannot install where gozer
+  cannot import.
+
+Notable moments:
+* Building the .deb exposed `main(argv=None)`: the installed `/usr/bin/gozer` crashed on every
+  call. Fixed, with a test.
+* In local container runs (not on a GitHub runner), the .deb installed and the smoke script
+  passed on Debian 12, Ubuntu 22.04 and Ubuntu 24.04.
+* A first draft of the page claimed testing on three platforms that had not been run. The claim
+  was removed and a test now forbids it.
+* The live-directory snapshot test was flaky because other agents write there.
+
+Not proven:
+* The GitHub workflows (`ci.yml`, `release.yml`) have never run on GitHub. The first push runs
+  them.
+* The .deb is untested on real hardware.
+* No apt repository exists. The package is a release asset.
+* `reset-all` is still unproven on hardware.
+
+### Installing in the QB2 image (2026-10-30, after the PR was open)
+
+Prompt: "can you try installing the debian files and trying the install helpers out in
+~/code/tt-developer-image qb2?" Built the 0.4.0 package in Debian 12 (lintian clean) and installed it
+in a throwaway container from `tenstorrent/qb2-env:latest` (user ttuser, Ubuntu 24.04, no
+`/dev/tenstorrent` passed; leases tested on a fake box only, because a container keeps its own gate
+and cannot see host processes).
+
+* Worked: `apt-get install`, `gozer --version`, `gozer-install-skills` from a fresh account with no
+  `~/.claude`, a second run, the real-directory refusal, `debian/tests/smoke`, read-only `status` and
+  `topology` against the real sysfs, `apt remove`. Nothing under `$HOME` was touched by the install.
+* Found: `Recommends: tt-smi` made `apt install ./tt-gozer.deb` pull the apt `tt-smi` 5.0.1 and about
+  thirty Python packages, next to the 6.1.0 `tt-smi` the QB2 already has in `~/.tenstorrent-venv`.
+  Changed to `Suggests: tt-smi` (test pins both halves), README says a `tt-smi` must be on the PATH for
+  resets. Overturns the spec's "Recommends".
+* Found, not changed: the image excludes man pages from installs (`path-exclude=/usr/share/man/*`), so
+  `man gozer` could not be tried there; its apt lists are stale until `apt-get update`; inside a
+  container gozer reads the host's sysfs but only the container's processes, so it reports host-held
+  chips as FREE (README now says to run gozer on the host).
+* Dropping the deb into `tt-developer-image/docker/debs/` would make `Dockerfile.qb2` step 7 install
+  every deb there and skip the apt install of tt-toplike; not done.

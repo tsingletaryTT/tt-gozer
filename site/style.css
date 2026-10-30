@@ -1,0 +1,244 @@
+/* SPDX-License-Identifier: Apache-2.0
+   SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
+
+   Stylesheet for the gozer explainer page. site_build/build.py inlines it
+   into docs/index.html, so the page needs no other file.
+
+   Colours come from the Tenstorrent docs-site theme. Every colour is a
+   variable on :root; tests/test_site_build.py reads these variables and
+   checks the contrast of each text/background pair the rules below use, so
+   a new `color:` rule must use a variable that the test checks. */
+
+:root {
+  color-scheme: light;
+
+  /* palette (docs-site theme) */
+  --ink: #092221;          /* dark base: body text */
+  --bg: #F1F8F8;           /* default background */
+  --line: #C7D9D8;         /* alt background, borders */
+  --alt: #DCF0EE;          /* alt2 background: annotation panels */
+  --panel: #FFFFFF;        /* cards */
+  --accent: #1B8EB1;       /* borders, focus ring, rules (not small text: 3.5:1 on --bg) */
+  --link: #136B85;         /* links: a darker accent that reaches 5.6:1 on --bg */
+  --muted: #3A5452;        /* secondary text */
+  --teal: #74C5DF;
+  --green: #6FABA0;
+  --yellow: #F6BC42;
+  --red: #FF9E8A;
+
+  /* terminal blocks */
+  --term-bg: #092221;
+  --term-fg: #F1F8F8;
+  --term-prompt: #74C5DF;
+  --term-muted: #8FB3B0;
+
+  /* top bar */
+  --bar-bg: #092221;
+  --bar-fg: #F1F8F8;
+  --bar-link: #74C5DF;
+
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --gutter: 16px;
+  --wide: 1120px;
+  --prose: 68ch;
+}
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; scroll-padding-top: 64px; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 17px;
+  line-height: 1.6;
+  overflow-wrap: break-word;
+}
+
+/* One type scale: 17 body, 15 small, 20 lead, 26 h3-ish, 32 h2, 40 h1. */
+h1, h2, h3 { line-height: 1.2; margin: 0 0 16px; }
+h1 { font-size: 40px; letter-spacing: -0.01em; }
+h2 { font-size: 32px; }
+h3 { font-size: 20px; }
+p, li { max-width: var(--prose); }
+p { margin: 0 0 16px; }
+.lead { font-size: 20px; }
+.small { font-size: 15px; color: var(--muted); }
+
+a { color: var(--link); text-decoration: underline; text-underline-offset: 2px; }
+a:hover { text-decoration-thickness: 2px; }
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+
+code { font-family: var(--mono); font-size: 0.92em; background: var(--alt); color: var(--ink); padding: 1px 4px; border-radius: 3px; }
+
+/* ----- top bar ------------------------------------------------------------ */
+.bar {
+  position: sticky; top: 0; z-index: 10;
+  background: var(--bar-bg); color: var(--bar-fg);
+  border-bottom: 3px solid var(--accent);
+}
+.bar-inner {
+  max-width: var(--wide); margin: 0 auto; padding: 10px var(--gutter);
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 20px;
+}
+.bar .name { font-family: var(--mono); font-weight: 700; font-size: 18px; color: var(--bar-fg); text-decoration: none; }
+.bar nav ul { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 16px; }
+.bar nav a { color: var(--bar-link); font-size: 15px; text-decoration: none; }
+.bar nav a:hover { text-decoration: underline; }
+.bar :focus-visible { outline-color: var(--bar-link); }
+
+/* ----- layout ------------------------------------------------------------- */
+main { display: block; }
+section { padding: 56px 0; border-bottom: 1px solid var(--line); }
+section:last-of-type { border-bottom: 0; }
+.wrap { max-width: var(--wide); margin: 0 auto; padding: 0 var(--gutter); }
+
+/* ----- hero --------------------------------------------------------------- */
+#hero { padding-top: 48px; }
+.hero-grid { display: grid; gap: 32px; grid-template-columns: minmax(0, 1fr); }
+.card {
+  background: var(--panel); color: var(--ink);
+  border: 1px solid var(--line); border-top: 4px solid var(--accent);
+  border-radius: 6px; padding: 20px;
+}
+.card h2 { font-size: 20px; margin-bottom: 12px; }
+.card p { font-size: 15px; color: var(--muted); }
+/* The install line wraps at its spaces on a narrow screen; the file name
+   (.nw) stays on one line. */
+.card .term { margin-bottom: 12px; }
+.card .term, .install-steps .term { white-space: pre-wrap; }
+.term .nw { white-space: nowrap; }
+.lease:focus { outline: 2px solid #092221; outline-offset: 1px; z-index: 1; }
+.lease-table { margin: 16px 0; }
+.lease-table summary { cursor: pointer; font-weight: 700; }
+
+/* ----- terminal blocks ---------------------------------------------------- */
+.term {
+  margin: 0;
+  background: var(--term-bg); color: var(--term-fg);
+  font-family: var(--mono); font-size: 14.5px; line-height: 1.55;
+  padding: 16px; border-radius: 6px;
+  max-width: 100%;
+  overflow-x: auto;
+  white-space: pre;
+  tab-size: 4;
+}
+.term .prompt { color: var(--term-prompt); user-select: none; }
+.term .cmd { color: var(--term-fg); font-weight: 700; }
+.term .exit { color: var(--term-muted); }
+
+/* One step of the session: terminal block, then the note beside it. */
+.steps { list-style: none; margin: 32px 0 0; padding: 0; counter-reset: step; }
+.step {
+  display: grid; gap: 12px; grid-template-columns: minmax(0, 1fr);
+  margin: 0 0 28px; max-width: none;
+}
+.note {
+  background: var(--alt); color: var(--ink);
+  border-left: 4px solid var(--accent); border-radius: 0 6px 6px 0;
+  padding: 12px 16px; font-size: 16px;
+}
+.note p { margin: 0; }
+.note code { white-space: nowrap; background: var(--panel); }
+.note .num { display: block; font-size: 15px; font-weight: 700; color: var(--muted); margin-bottom: 4px; }
+
+/* ----- afternoon ---------------------------------------------------------- */
+.figure {
+  max-width: 100%;
+  overflow-x: auto;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+  padding: 16px; margin: 24px 0;
+}
+/* The timeline is 4.5 hours wide; below this width it scrolls inside its frame. */
+.timeline { min-width: 720px; }
+/* lanes_html sets small inline sizes; raise them for reading. */
+.timeline .lease { font-size: 13px !important; line-height: 24px; }
+.timeline .lane > span { font-size: 15px !important; flex-basis: 72px !important; }
+.legend-wrap .legend { margin: 0 0 16px !important; }
+.legend-wrap .legend li { font-size: 15px !important; }
+.timeline .lane > div { height: 30px !important; }
+/* lanes_html prints the window's start and end as raw timestamps; the page
+   shows hour marks (build._hours_html) in their place. */
+.timeline .lanes > div:not(.lane):not(.hours) { display: none !important; }
+.hours {
+  position: relative; height: 24px;
+  margin: 6px 0 4px 80px; font-size: 15px; color: var(--muted);
+  font-family: var(--mono); white-space: nowrap;
+}
+.captions { padding-left: 20px; }
+.captions li { margin-bottom: 6px; }
+
+/* ----- how it works ------------------------------------------------------- */
+.how-grid { display: grid; gap: 32px; grid-template-columns: minmax(0, 1fr); align-items: start; }
+.how-steps { padding-left: 24px; margin: 0; }
+.how-steps li { margin-bottom: 20px; }
+.how-steps li strong { display: block; font-size: 20px; }
+.how .figure svg { display: block; width: 100%; max-width: 360px; height: auto; margin: 0 auto; }
+.aside {
+  background: var(--panel); color: var(--ink);
+  border: 1px solid var(--line); border-left: 4px solid var(--yellow);
+  border-radius: 0 6px 6px 0; padding: 16px 20px; margin-top: 8px;
+}
+.aside h3 { margin-bottom: 8px; }
+.aside p { margin: 0; }
+
+/* ----- install ------------------------------------------------------------ */
+.install-steps { padding-left: 24px; }
+.install-steps li { margin-bottom: 16px; max-width: 72ch; }
+.install-steps .term { margin-top: 6px; }
+
+/* ----- example log -------------------------------------------------------- */
+.table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+  margin: 16px 0;
+}
+caption { text-align: left; padding: 0 0 8px; }
+table { border-collapse: collapse; background: var(--panel); color: var(--ink); font-size: 16px; min-width: 520px; }
+th, td { text-align: left; padding: 8px 14px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { background: var(--alt); color: var(--ink); font-weight: 700; }
+td.n { text-align: right; font-variant-numeric: tabular-nums; }
+th.n { text-align: right; }
+td.who { font-family: var(--mono); font-size: 15px; }
+.nw { white-space: nowrap; }
+
+/* ----- users -------------------------------------------------------------- */
+.users { list-style: none; padding: 0; margin: 24px 0 0; }
+.users li { margin: 0 0 18px; padding-left: 14px; border-left: 3px solid var(--green); }
+.users a { font-family: var(--mono); font-weight: 700; }
+
+/* ----- footer ------------------------------------------------------------- */
+footer { background: var(--bar-bg); color: var(--bar-fg); padding: 28px 0; font-size: 15px; }
+footer a { color: var(--bar-link); }
+footer p { margin: 0; }
+
+/* ----- wide screens ------------------------------------------------------- */
+@media (min-width: 900px) {
+  .hero-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 480px); align-items: center; }
+  .step { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 20px; align-items: start; }
+  /* Room enough to wrap the few long lines in place, so nothing is hidden. */
+  .step .term { white-space: pre-wrap; }
+  .how-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  h1 { font-size: 48px; }
+}
+
+@media (max-width: 480px) {
+  h1 { font-size: 32px; }
+  h2 { font-size: 27px; }
+  section { padding: 40px 0; }
+  .term { font-size: 13.5px; padding: 12px; }
+  .figure { padding: 8px; }
+  /* The example table on a phone: names break after the colon, durations
+     wrap, text stays at 14px. Where it is still too wide (about 360px and
+     below) it scrolls inside .table-wrap. */
+  table { min-width: 0; width: 100%; font-size: 14px; }
+  th, td { padding: 6px 3px; white-space: normal; }
+  th { font-size: 14px; }
+  th:first-child, td:first-child { padding-left: 4px; }
+  th:last-child, td:last-child { padding-right: 4px; }
+  td.who { font-size: 14px; padding-right: 0; }
+  td.who .nw { display: block; }
+}

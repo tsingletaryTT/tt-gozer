@@ -1,0 +1,211 @@
+# gozer release: an explainer site and Debian packages built by CI
+
+Date: 2026-10-30. Status: draft for approval. Covers three things that ship together.
+
+## Why
+
+gozer is ready for people other than us to use. Two things stand in the way.
+
+1. The public page (`docs/index.html`, published with GitHub Pages) is a scoreboard of
+   who held which chip. It does not say what gozer does or why anyone would want it, and
+   its graphs are hard to read.
+2. There is no way to install gozer except cloning the repo and running `install.sh`.
+
+The pitch, in the user's words: gozer lets you, your agents and your apps just work without
+re-implementing a chip "please and thank you" routine. Queue up, keep working until the
+hardware is available, do the work on the hardware, and keep going. Everyone gets a turn.
+The person using it tells the machine what to do and it happens, often in parallel.
+
+## Goals
+
+* The first screen shows gozer working: a real terminal session, with a short plain
+  explanation beside each real line (the user chose "terminal first", over a story-first and
+  a problem-first layout).
+* Every example on the page is real. Terminal output comes from running the real `gozer`
+  CLI. The example afternoon comes from the real history log.
+* A reader who has never heard of gozer understands what it does and why within a minute.
+* A section at the end lists the software that already uses gozer, with one verified line
+  each on how.
+* A `.deb` is built by CI for each release and attached to it, and a clean machine can
+  install it and run `gozer`.
+* The site is legible: one readable type scale, the Tenstorrent docs-site palette, and no
+  chart that needs explaining.
+
+## Non-goals and anti-goals
+
+* Not a marketing site. No hero video, no sign-up form, no analytics.
+* No live data and no server. The site is static files.
+* No leaderboard as the main attraction. A small example log stays, clearly labelled as an
+  example. It must not read as a ranking of people or agents.
+* Do not publish task text. Reasons stay reduced to themes, as `gozer report` already does
+  (`report.theme_for_reason`).
+* Do not publish anything that implies a claim we have not checked. A project is listed
+  under "who uses it" only after its call sites have been read.
+* Do not name any binary `tt` (see the global CLAUDE.md). The command stays `gozer`.
+* The `.deb` must not change a machine on install beyond placing files. It does not enable
+  the reconcile timer and does not edit anyone's home directory.
+
+## What the page contains, in order
+
+1. **Hero.** One sentence: tell the machine what to do, it happens, often in parallel.
+   One more sentence on what gozer is. Install command beside it.
+2. **A real session, each line explained.** Three agents ask for two chips on a two-board
+   box. The first two are granted a board each. The third gets a ticket and keeps working.
+   Then `gozer status`, `gozer wait` handing the queued agent its chips when a board frees,
+   and `release`. The text beside each block says what happened and why it mattered.
+3. **One person's afternoon.** A timeline built from the real log: Monday 26 October 2026,
+   16:00 to 20:30 UTC, two boards, eight agents. No crash in the window (the user asked for
+   a story without one). Lanes per board, one block per lease, time left to right, with plain
+   captions. Events the captions draw on (all checked against the log):
+   * 16:09 to 16:42, one agent takes and releases a board six times at about 47 s each and
+     nobody else is held up;
+   * 17:03, another agent takes a board for 4 h 5 min;
+   * 17:12, both boards are busy and three agents ask; the first waits 34 min and the
+     second 27 min;
+   * 17:47:14 released and 17:47:18 granted, a four-second handoff;
+   * 18:12:42, a release and a grant in the same second.
+   The user was shown this and said it looks better. It is the shape to build, with the
+   styling cleaned up.
+4. **How it works.** Three short steps and one diagram: a lease per board, a queue,
+   and the check that a chip is really in use (an open device descriptor proves use; the lease record only says who asked).
+   Plain language, no jargon the first section did not introduce.
+5. **Install.** `apt install` of the release `.deb`, or `install.sh` from a clone. Three
+   commands at most. There is no PyPI package and the page does not document `pip install`.
+6. **An example leaderboard.** Small, from the same real log, labelled as an example of one
+   box's week. Agent names appear (they are not task text). No ranking language.
+7. **Who uses it.** A list, last on the page. One line per project: what it is and how it
+   calls gozer (for example, a supervisor that takes a lease before it starts a model
+   server). Each line comes from reading the project's code and scripts. Notes written for
+   agents do not count. Only public repositories are named.
+
+## How the examples are produced
+
+* **Terminal sessions** are generated by a script that runs the real `gozer` CLI against a
+  fake two-board sysfs tree, in a temporary state directory. This is the same technique the
+  test suite uses. Lease ids, ticket ids and timestamps are replaced with fixed values so the
+  output is the same on every run. The script is part of the repo and the site build runs it,
+  so the page cannot drift from the tool.
+* **The afternoon** is generated from a checked-in data file, a trimmed extract of the real
+  history log for that window: event name, time, agent, chips, lease id, duration. Reasons
+  are dropped. The source exists: the live log, merged into
+  `~/.local/state/tt-gozer/history.jsonl` (956 events, 22 to 30 October 2026), with an
+  untouched copy beside it as `history-backup-2026-10-30.jsonl`. The log in the repo
+  (`gozer/history_archive.jsonl`) ends on 10 September and is not the source. The extract is
+  committed so the page stays reproducible whatever happens to the live log.
+* **The example leaderboard** is computed from the same extract by the existing
+  `gozer/report.py`, simplified to a roster. The hand-built charts are dropped.
+* **`gozer report` stays as a command.** Its default output moves from `docs/index.html` to
+  `docs/log.html`, so running it can no longer overwrite the new site. The old report page is
+  not linked from the site. (Author's call.)
+* **Where the generator lives.** A build script, `scripts/build_site.py`, with its templates in
+  `site/`. It is not part of the `gozer` package and the `.deb` does not ship it.
+  (Author's call.)
+* **Reproducible output.** The generator takes no clock reading and no host state: the fake
+  sysfs and a fake `/proc` live in a temporary directory (`GOZER_ROOT`, `GOZER_SYSFS_ROOT`,
+  `GOZER_PROC_ROOT`, `GOZER_RESET_CMD` set to a stub), so neither the real `/proc` nor the
+  real `tt-smi` is touched. Ids and times are replaced with fixed values. CI pins the Python
+  version, so the same build gives the same bytes. (Author's call.)
+
+## The Debian package
+
+* Name `tt-gozer`; installs the `gozer` command. Architecture-independent (`all`): gozer is
+  pure Python with no compiled parts. No package called `gozer` or `tt-gozer` exists in the
+  Ubuntu 24.04 archive.
+* **Packaging follows Debian policy**, which Ubuntu inherits:
+  * a `debian/` directory with `debhelper-compat (= 13)`, `dh-python` and `pybuild`, so the
+    Python package lands in the standard `dist-packages` path and the dependency line is
+    generated (`${python3:Depends}`), not hand-written;
+  * source format `3.0 (native)`, since upstream and packager are the same project, with
+    `debian/changelog` kept in step with `gozer.__version__`;
+  * `debian/copyright` in machine-readable (DEP-5) form for Apache-2.0, with the SPDX
+    headers already in the source;
+  * `Standards-Version` current, a `Maintainer` and `Homepage`, and `Rules-Requires-Root: no`;
+  * a man page for `gozer`, as lintian expects for a binary in `/usr/bin`;
+  * the reconcile unit installed as a systemd *user* unit under `/usr/lib/systemd/user`,
+    never enabled by the package, and no hand-written maintainer scripts (the only scripts are the ones dh_python3 generates to compile and remove Python bytecode, which enable nothing and touch no home directory; without them a non-root run cannot cache bytecode in `dist-packages`);
+  * an `autopkgtest` smoke test in `debian/tests` that runs a lease against a fake box;
+  * reproducible: file times come from `SOURCE_DATE_EPOCH`, taken from the changelog date;
+  * CI builds with `dpkg-buildpackage -us -uc -b` in a container and runs `lintian` on the
+    result. A lintian error fails the build, and warnings are listed in the job summary.
+* **This reverses one earlier call.** `pybuild` needs a build definition, so the repo gets a
+  minimal `pyproject.toml` (setuptools backend, version read from `gozer.__version__`). It
+  exists for the package build. `pip install` and PyPI stay out of scope and out of the
+  Install section.
+* Contents:
+  * the `gozer` Python package under `/usr/lib/python3/dist-packages`, and `/usr/bin/gozer`;
+  * the three skills under `/usr/share/tt-gozer/skills`, with a small `gozer-install-skills`
+    command that links them into `~/.claude/skills` for the user who runs it (a package
+    cannot do this for each user, and must not touch home directories);
+  * the reconcile service and timer under `/usr/share/tt-gozer/contrib` (not enabled);
+  * the README and licence under `/usr/share/doc/tt-gozer`.
+* Depends on the Python interpreter only (`${python3:Depends}`). Suggests `tt-smi`; resets
+  need one on the PATH and leases do not. It is a Suggests, because on a QB2 a Recommends makes
+  apt install the older apt `tt-smi` and about thirty Python packages next to the `tt-smi` the
+  tt-installer already put in a venv (found by installing the package in the qb2 image).
+  Version comes from `gozer.__version__`.
+* CI builds it with GitHub Actions on every tag `v*`. The workflow creates the GitHub release
+  and attaches the file. It fails at once if the tag is not `v` plus `gozer.__version__`. It
+  runs the test suite first, then installs the `.deb` in clean containers (Debian 12, Ubuntu
+  22.04 and Ubuntu 24.04, all of which have Python 3.10 or newer) and runs `gozer --version`
+  and a lease on a fake box in each. A pull-request build runs the same steps and
+  uploads the `.deb` as an artifact without releasing.
+* The same workflow also checks that the committed site is current: it regenerates the
+  site and fails if `docs/` differs.
+
+## Constraints
+
+* GitHub Pages keeps serving from `docs/` on `main`. The repo's publishing setting does not
+  change, and the site stays a committed build output, as `gozer report` made it.
+* The repo is `tsingletaryTT/tt-gozer` on GitHub. CI is GitHub Actions.
+* Python 3.10 or newer, as the code already requires.
+* Palette from the docs-site theme (dark teal `#092221`, accent `#1B8EB1`, backgrounds
+  `#F1F8F8` and `#C7D9D8`, semantic teal, green, yellow, red). Type: system sans for body
+  and a monospace for sessions; the brand fonts are not redistributed.
+* Works at phone width, in light mode, with text that stays readable without JavaScript.
+  Any script is for small conveniences only.
+
+## Decisions already made by the user
+
+* Terminal-first page order, with real examples throughout.
+* Agent names in the afternoon story and the example log are shown as they are in the log.
+* tt-rl is not listed under "who uses it".
+* "Who uses it" is the last section.
+* The afternoon story uses the real history, with no crash in it.
+* The reduced task-text rule from `gozer report` stays.
+* Debian packages come from CI.
+* History is kept in `~/.local/state/tt-gozer` going forward (done in 0.3.9, below).
+
+## Calls made by the author, not the user
+
+* Package name `tt-gozer`, command `gozer`, architecture `all`, native source format.
+* Skills are not installed per user by the package; a helper command does it.
+* The site stays a committed `docs/` build that CI checks. CI does not deploy it, which
+  avoids changing repository settings.
+* The example week is 26 October 2026, 16:00 to 20:30 UTC.
+* No custom fonts, no JavaScript framework, no charts library.
+* A minimal `pyproject.toml` is added for `pybuild` (see the package section).
+* The "who uses it" list is limited to public repositories whose code or scripts call
+  `gozer`. Checked for visibility: tt-orchard, tt-station, tt-local-generator
+  (`tenstorrent/tt-local-generator`), tt-tnt (tt-nanollama3 is a checkout of the same
+  repository), tt-bio-demo, tensixinet, tt-waypoint, tt-discolike and tt-openvla
+  are all public. tt-rl is public but is not the author's project, so it is left out (user's call). tt-studio-packs, audio8-asr and
+  tt-stable-audio-3-small-music have no git remote on this machine, so they are left out
+  unless a public repo turns up. The builder reads each listed project's call sites before
+  naming it, and drops any it cannot confirm. A shorter list is fine.
+
+## Left to the builder
+
+* The exact visual design inside the palette and the layout rules above.
+* The text of each explanation beside the terminal lines and of the "how it works" diagram.
+* Whether the site build is a small Python script or a few templates.
+* Exact `debian/` file contents, as long as the practices and contents above are met and
+  `lintian` reports no errors.
+* The wording of each "who uses it" line, kept to one line each.
+
+## Related work that lands with this release
+
+The 0.3.9 change (history in `~/.local/state/tt-gozer`) is written and tested but not yet
+committed. It is in the working tree together with this document, and `docs/index.html` shows
+as modified because something else regenerated it; the new site replaces that file. The first
+step of the plan is to commit the 0.3.9 change on its own. The release is tagged after the
+site and package work, with the tag matching `gozer.__version__` at that point (0.3.9 or later).

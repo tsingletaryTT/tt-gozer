@@ -3,3 +3,12 @@ __pycache__/
 .pytest_cache/
 .venv/
 .superpowers/
+debian/.debhelper/
+debian/files
+debian/*.substvars
+debian/debhelper-build-stamp
+debian/tt-gozer/
+debian/*.log
+build/
+*.egg-info
+docs/log.html

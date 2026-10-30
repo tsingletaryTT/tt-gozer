@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
+#
+# Minimal setuptools build definition. Debian's pybuild reads this to package
+# gozer. Only the `gozer` package ships; site_build/ and scripts/ never do.
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tt-gozer"
+description = "Cooperative Tenstorrent chip leasing so multiple agents can share one box"
+readme = "README.md"
+license = {text = "Apache-2.0"}
+requires-python = ">=3.10"
+# The version lives in gozer/__init__.py; see [tool.setuptools.dynamic].
+dynamic = ["version"]
+
+[project.scripts]
+gozer = "gozer.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "gozer.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["gozer*"]
+
+[tool.setuptools.package-data]
+gozer = ["report_template.html"]
+# history_archive.jsonl stays in the repository for its own docs/log.html and is
+# not packaged: an installed `gozer report` shows only the local history.

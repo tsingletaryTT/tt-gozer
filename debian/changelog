@@ -1,0 +1,22 @@
+tt-gozer (0.4.0) unstable; urgency=medium
+
+  * First Debian package. Installs the gozer command, the three Claude Code
+    skills, gozer-install-skills, a man page, and the reconcile systemd user
+    units (installed, never enabled).
+  * The explainer site is built from real CLI output and the real history log.
+  * tt-gozer Debian package and gozer-install-skills.
+  * CI builds and lints the package, and a v<version> tag publishes a release.
+  * gozer report writes docs/log.html by default.
+  * main(argv=None) works when called with no arguments, as the installed
+    /usr/bin/gozer does.
+  * Suggests tt-smi instead of recommending it, so installing on a QB2 does not
+    pull in an older apt tt-smi next to the one tt-installer already provides.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Fri, 30 Oct 2026 13:00:00 -0700
+
+tt-gozer (0.3.9) unstable; urgency=medium
+
+  * history.jsonl defaults to ~/.local/state/tt-gozer. Not released as a
+    package.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Fri, 30 Oct 2026 12:00:00 -0700

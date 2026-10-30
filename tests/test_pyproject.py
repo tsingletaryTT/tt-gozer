@@ -1,0 +1,80 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
+"""Pins the shape of pyproject.toml, which Debian's pybuild reads to package gozer."""
+import os
+import re
+
+import pytest
+
+tomllib = pytest.importorskip("tomllib")
+
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _load():
+    with open(os.path.join(REPO, "pyproject.toml"), "rb") as f:
+        return tomllib.load(f)
+
+
+def test_version_is_read_from_the_package():
+    data = _load()
+    assert data["project"]["dynamic"] == ["version"]
+    assert data["tool"]["setuptools"]["dynamic"]["version"]["attr"] == "gozer.__version__"
+
+
+def test_entry_point_is_gozer_cli_main():
+    assert _load()["project"]["scripts"]["gozer"] == "gozer.cli:main"
+
+
+def test_only_the_gozer_package_ships():
+    find = _load()["tool"]["setuptools"]["packages"]["find"]
+    assert find["include"] == ["gozer*"]
+
+
+def test_report_template_is_package_data_and_the_archive_is_not():
+    # The September archive belongs to this repo's own docs/log.html. It is not
+    # shipped, so an installed `gozer report` shows only the local history.
+    pkg_data = _load()["tool"]["setuptools"]["package-data"]["gozer"]
+    assert "report_template.html" in pkg_data
+    assert "history_archive.jsonl" not in pkg_data
+
+
+def test_requires_python_310():
+    assert _load()["project"]["requires-python"] == ">=3.10"
+
+
+def test_setuptools_floor_is_old_enough_for_distro_packages():
+    # Debian 12 ships setuptools 66.x, Ubuntu 24.04 68.x; the floor must not exceed 66.
+    (req,) = _load()["build-system"]["requires"]
+    m = re.fullmatch(r"setuptools>=(\d+)(?:\.\d+)*", req)
+    assert m and int(m.group(1)) <= 66
+
+
+def test_license_is_apache_text_form():
+    # The SPDX string form needs setuptools 77+; the table form works from 61.
+    assert _load()["project"]["license"] == {"text": "Apache-2.0"}
+
+
+def test_entry_point_main_can_be_called_without_arguments(monkeypatch, capsys):
+    # The generated /usr/bin/gozer runs `sys.exit(main())`, so main() must
+    # default argv to sys.argv[1:]. Found when the built .deb crashed on
+    # `gozer --version` with "missing 1 required positional argument".
+    from gozer.cli import main
+    monkeypatch.setattr("sys.argv", ["gozer", "--version"])
+    with pytest.raises(SystemExit) as e:
+        main()
+    assert e.value.code == 0
+    assert capsys.readouterr().out.startswith("gozer ")
+
+
+def test_readme_states_the_minimum_python_from_pyproject():
+    """The README's install section names the same minimum as requires-python."""
+    import os
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root, "pyproject.toml")) as fh:
+        minimum = re.search(r'requires-python\s*=\s*">=\s*([0-9.]+)"', fh.read()).group(1)
+    with open(os.path.join(root, "README.md")) as fh:
+        readme = fh.read()
+    install = readme[readme.index("## Install"):readme.index("## For humans")]
+    claimed = re.findall(r"Python ([0-9]+\.[0-9]+)\+", install)
+    assert claimed == [minimum]

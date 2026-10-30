@@ -20,12 +20,12 @@ mutex lives in its own *non-sticky* `mutex/` (0o777) directory instead, for
 reasons explained on `critical_section`.
 
 `history.jsonl` (see gozer/history.py) lives under a separate `history_root`
-attribute, not necessarily `root`: it defaults to `root` (so by default it
-sits right alongside the rest of this layout and is lost on reboot with it),
-but `GOZER_HISTORY_ROOT` or the `history_root` constructor param can point it
-at a persistent path instead. That split exists because leases/gate/queue
-*should* vanish on reboot — the chips themselves get reset — while the
-append-only audit trail doesn't have to.
+attribute, not necessarily `root`. With no root named it defaults to the
+per-user state dir (`~/.local/state/tt-gozer`), which survives a reboot; a
+caller that names a root keeps it beside that root; `GOZER_HISTORY_ROOT` or the
+`history_root` constructor param override both. That split exists because
+leases/gate/queue *should* vanish on reboot — the chips themselves get reset —
+while the append-only audit trail must not.
 """
 
 from __future__ import annotations
@@ -70,6 +70,8 @@ MUTEX_STALE_SECONDS = 30
 # opened its device yet; reaping too late only delays the next tenant by the
 # same margin. This is separate from -- and never wired into -- `expect_done`,
 # which stays advisory and never reaps on its own (see the design spec).
+# This figure is also stated in debian/gozer.1 and README.md; a test checks the
+# man page. Change them together.
 DETACHED_GRACE_SECONDS = 900
 
 # Sentinel for release_unit's `expected_lease_id`, so that passing None
@@ -127,18 +129,37 @@ class ChipState:
     owner_dead: bool = False
 
 
+def _user_state_dir() -> str:
+    """$XDG_STATE_HOME/tt-gozer, else ~/.local/state/tt-gozer."""
+    base = os.environ.get("XDG_STATE_HOME") or os.path.join(
+        os.path.expanduser("~"), ".local", "state")
+    return os.path.join(base, "tt-gozer")
+
+
 class Gatekeeper:
     def __init__(self, root: str | None = None, sysfs_root: str | None = None,
                  proc_root: str = "/proc", history_root: str | None = None):
-        self.root = root or os.environ.get("GOZER_ROOT") or DEFAULT_ROOT
+        explicit_root = root or os.environ.get("GOZER_ROOT")
+        self.root = explicit_root or DEFAULT_ROOT
         # history.jsonl's home is decoupled from the rest of the gate state:
         # leases/gate/queue *should* vanish on reboot (the chips themselves
-        # get reset), but the audit trail doesn't have to. Defaults to
-        # self.root -- today's exact behavior -- unless a caller opts into a
-        # persistent path via GOZER_HISTORY_ROOT or this param.
-        self.history_root = (history_root
-                              or os.environ.get("GOZER_HISTORY_ROOT")
-                              or self.root)
+        # get reset), but the audit trail must not. Resolution order:
+        #   1. the history_root argument, then GOZER_HISTORY_ROOT;
+        #   2. beside the root, when the caller named one (argument or
+        #      GOZER_ROOT) -- tests and custom setups keep history with the
+        #      state they chose;
+        #   3. otherwise the per-user state dir, $XDG_STATE_HOME/tt-gozer
+        #      (~/.local/state/tt-gozer), which survives a reboot. Before this
+        #      the default was the root under /tmp, and nothing ever set
+        #      GOZER_HISTORY_ROOT, so the log was lost every reboot.
+        # The state dir is per user: on a box shared by several users each one
+        # keeps the history of the commands they ran.
+        self._history_in_user_state_dir = False
+        history = history_root or os.environ.get("GOZER_HISTORY_ROOT")
+        if not history and not explicit_root:
+            history = _user_state_dir()
+            self._history_in_user_state_dir = True
+        self.history_root = history or self.root
         self.sysfs_root = sysfs_root
         self.proc_root = proc_root
         # Set by cmd_reconcile when --sudo is passed; see procfd.holders().
@@ -179,11 +200,20 @@ class Gatekeeper:
         os.makedirs(mutex_dir, exist_ok=True)
         with contextlib.suppress(OSError):
             os.chmod(mutex_dir, 0o777)
-        if self.history_root != self.root:
-            first_history = not os.path.isdir(self.history_root)
-            os.makedirs(self.history_root, exist_ok=True)
-            if first_history:
-                with contextlib.suppress(OSError):
+        # The history directory is best-effort in both branches: history.log
+        # already swallows OSError, so a history directory that cannot be made
+        # (read-only or full filesystem, a path under a regular file) only
+        # means no history is written. It must never stop the gate, or even
+        # `gozer release`, from working.
+        if self._history_in_user_state_dir:
+            # A private directory in the user's home: no sticky/world bits.
+            with contextlib.suppress(OSError):
+                os.makedirs(self.history_root, exist_ok=True)
+        elif self.history_root != self.root:
+            with contextlib.suppress(OSError):
+                first_history = not os.path.isdir(self.history_root)
+                os.makedirs(self.history_root, exist_ok=True)
+                if first_history:
                     os.chmod(self.history_root, 0o1777)
 
     def _gate_dir(self, unit_key: str) -> str:

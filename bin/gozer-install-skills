@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
+# Link the gozer Claude Code skills into the calling user's skills directory.
+#
+# Usage: gozer-install-skills [--from DIR] [--to DIR]
+#
+#   --from DIR  where the skills live. Default: /usr/share/tt-gozer/skills (the
+#               Debian package), else <this script's real dir>/../skills (a git
+#               checkout, also when run through a symlink such as ~/.local/bin).
+#   --to DIR    where to link them. Default: $HOME/.claude/skills (required when
+#               HOME is not set).
+#
+# The package installs skills read-only and cannot touch home directories, so
+# the user runs this themselves. Idempotent: a second run changes nothing.
+set -euo pipefail
+
+FROM=""
+TO=""
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --from) [ $# -ge 2 ] || { echo "error: --from needs a directory" >&2; exit 2; }
+                FROM="$2"; shift 2 ;;
+        --to)   [ $# -ge 2 ] || { echo "error: --to needs a directory" >&2; exit 2; }
+                TO="$2"; shift 2 ;;
+        -h|--help) sed -n '5,13p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *) echo "error: unknown argument: $1" >&2; exit 2 ;;
+    esac
+done
+
+# Default --to needs HOME; say so plainly instead of an "unbound variable".
+if [ -z "$TO" ]; then
+    if [ -z "${HOME:-}" ]; then
+        echo "gozer-install-skills: HOME is not set; pass --to DIR" >&2
+        exit 2
+    fi
+    TO="$HOME/.claude/skills"
+fi
+
+# Default --from. Resolve the script's real path so a symlink in ~/.local/bin
+# still finds the checkout it points into.
+if [ -z "$FROM" ]; then
+    if [ -d /usr/share/tt-gozer/skills ]; then
+        FROM=/usr/share/tt-gozer/skills
+    else
+        SELF="$(readlink -f "${BASH_SOURCE[0]}")"
+        FROM="$(dirname "$SELF")/../skills"
+    fi
+fi
+
+if [ ! -d "$FROM" ]; then
+    echo "error: skills directory $FROM does not exist." >&2
+    exit 1
+fi
+FROM="$(cd "$FROM" && pwd)"
+
+# `ln -sfn` links *inside* an existing real directory instead of replacing it,
+# leaving SKILL.md unreachable at the path Claude Code scans, with exit 0.
+# Refuse rather than half-install, and never rm -rf: the user may have put
+# something there on purpose. (Same rule as install.sh.)
+refuse_if_real_dir() {
+    local target="$1"
+    if [ -e "$target" ] && [ ! -L "$target" ] && [ ! -d "$target" ]; then
+        echo "error: $target already exists as a regular file (not a symlink)." >&2
+        echo "  refusing to link here. Move or remove $target yourself," >&2
+        echo "  then re-run gozer-install-skills." >&2
+        exit 1
+    fi
+    if [ -d "$target" ] && [ ! -L "$target" ]; then
+        echo "error: $target already exists as a real directory (not a symlink)." >&2
+        echo "  contents: $(ls -A "$target" 2>/dev/null | tr '\n' ' ')" >&2
+        echo "  refusing to link here. Move or remove $target yourself," >&2
+        echo "  then re-run gozer-install-skills." >&2
+        exit 1
+    fi
+}
+
+# Check every target before linking any, so a refusal leaves nothing half done.
+skills=()
+for dir in "$FROM"/gozer-*/; do
+    [ -d "$dir" ] || continue
+    name="$(basename "$dir")"
+    refuse_if_real_dir "$TO/$name"
+    skills+=("$name")
+done
+
+if [ ${#skills[@]} -eq 0 ]; then
+    echo "error: no gozer-* skill directories found in $FROM." >&2
+    exit 1
+fi
+
+# Link each directory individually; the skills directory holds unrelated
+# skills that linking the parent would clobber.
+mkdir -p "$TO"
+for name in "${skills[@]}"; do
+    ln -sfn "$FROM/$name" "$TO/$name"
+    echo "  $TO/$name -> $FROM/$name"
+done

@@ -1,0 +1,29 @@
+Source: tt-gozer
+Section: utils
+Priority: optional
+Maintainer: Taylor Singletary <tsingletary@tenstorrent.com>
+Build-Depends: debhelper-compat (= 13),
+               dh-python,
+               pybuild-plugin-pyproject,
+               python3-all,
+               python3-setuptools
+Standards-Version: 4.6.2
+# Keep equal to requires-python in pyproject.toml (a test checks).
+X-Python3-Version: >= 3.10
+Rules-Requires-Root: no
+Homepage: https://github.com/tsingletaryTT/tt-gozer
+
+Package: tt-gozer
+Architecture: all
+Depends: ${python3:Depends}, ${misc:Depends}
+Suggests: tt-smi
+Description: cooperative Tenstorrent chip leasing for shared boxes
+ gozer lets several agents and people share one machine with Tenstorrent
+ accelerators. A workload takes a lease on one or more boards before it opens
+ /dev/tenstorrent/*, and gives it back when it is done. Leases are checked
+ against the open file descriptors of real processes, so a crashed workload
+ does not hold a board forever. Requests that cannot be met are queued.
+ .
+ The package also ships three Claude Code skills and gozer-install-skills,
+ which links them into the calling user's ~/.claude/skills. Resetting chips
+ needs tt-smi; leasing does not.

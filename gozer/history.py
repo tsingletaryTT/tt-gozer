@@ -10,16 +10,18 @@ requirement (*who holds the device* is legible) failing in the past tense.
 
 `<history_root>/history.jsonl` fixes that: one JSON object per line, appended
 forever, never rewritten or truncated by this module. `history_root` is a
-Gatekeeper's own `history_root` attribute, which defaults to `GOZER_ROOT`
-(default /tmp/tt-gozer) -- so by default the log lives alongside the rest of
-the gate state and is lost on reboot along with it, same as before. Unlike
-`GOZER_ROOT`, though, this location can be moved: `GOZER_HISTORY_ROOT` (or
-Gatekeeper's `history_root` param) points it at a persistent path instead,
-while leases/gate/queue stay under `GOZER_ROOT` -- those correctly vanish on
-reboot (the chips themselves get reset), but the audit trail doesn't have to.
-Not a per-user path like `~/.local/state` even when redirected: the whole
-point is one shared timeline across every agent on the box, and a per-user
-path would fragment it into as many logs as there are users. See
+Gatekeeper's own `history_root` attribute. By default (no root named, no
+GOZER_HISTORY_ROOT) it is the per-user state dir,
+`$XDG_STATE_HOME/tt-gozer` (`~/.local/state/tt-gozer`), which survives a
+reboot. Until 0.3.9 it defaulted to `GOZER_ROOT` (/tmp/tt-gozer) and was lost
+on reboot with the gate state, because nothing ever set GOZER_HISTORY_ROOT.
+A caller that names a root (the `root` argument or GOZER_ROOT) keeps the log
+beside it, and GOZER_HISTORY_ROOT (or Gatekeeper's `history_root` param)
+overrides both. leases/gate/queue stay under `GOZER_ROOT`: those correctly
+vanish on reboot (the chips themselves get reset), but the audit trail must not.
+The default is per user. On a box where several users run gozer, each sees the
+history of the commands they ran; point everyone's GOZER_HISTORY_ROOT at one
+shared directory to get a single timeline. See
 gatekeeper.py's module docstring and the design spec's Observability section.
 
 Concurrency: every write opens with O_APPEND and lands in exactly one

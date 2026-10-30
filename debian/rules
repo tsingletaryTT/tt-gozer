@@ -1,0 +1,14 @@
+#!/usr/bin/make -f
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
+#
+# pybuild reads pyproject.toml. The systemd user units are installed as plain
+# files by tt-gozer.install. debhelper would otherwise find them and generate
+# postinst/prerm/postrm scripts that enable the timer; the empty override below
+# stops that. The package has no hand-written maintainer scripts, only the
+# bytecode compile and clean scripts dh_python3 generates, and nothing is enabled.
+%:
+	dh $@ --with python3 --buildsystem=pybuild
+
+override_dh_installsystemduser:
+	@:

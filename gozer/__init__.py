@@ -57,4 +57,18 @@ The keymaster must meet the gatekeeper for the coming of Gozer.
 # says whether it was reaped (when, why) or already released; `status` and
 # `reconcile` say when a lease's owner pid is dead (holder and container named
 # when visible, a warning that other users' containers are invisible when not).
-__version__ = "0.3.8"
+#
+# 0.3.9: history.jsonl defaults to ~/.local/state/tt-gozer (XDG_STATE_HOME) when
+# no root or history root is named, so it survives a reboot. It was under
+# GOZER_ROOT in /tmp and lost every time; nothing had ever set
+# GOZER_HISTORY_ROOT. A named root keeps history beside it, as before.
+#
+# 0.4.0 (2026-10-30): the first packaged release. The explainer site
+# (docs/index.html) is built from real CLI output and the real history log;
+# the `tt-gozer` Debian package and `gozer-install-skills` install the command,
+# the three skills and the optional reconcile units; CI builds and lints the
+# package and publishes a release from a v<version> tag; and `gozer report`
+# now writes docs/log.html by default (it used to overwrite docs/index.html).
+# `main(argv=None)` also works when called with no arguments, which the
+# installed /usr/bin/gozer entry point does.
+__version__ = "0.4.0"
