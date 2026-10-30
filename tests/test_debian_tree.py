@@ -141,9 +141,13 @@ def test_man_page_th_line_matches_package_version():
 
 
 def test_source_stanza_pins_python_floor_to_pyproject():
-    import tomllib
-    with open(os.path.join(REPO, "pyproject.toml"), "rb") as f:
-        minimum = tomllib.load(f)["project"]["requires-python"].lstrip(">=")
+    # Read the line with a regex rather than tomllib: tomllib arrived in
+    # Python 3.11 and this suite also runs on 3.10, the package's minimum.
+    with open(os.path.join(REPO, "pyproject.toml")) as f:
+        found = re.search(r'^requires-python\s*=\s*">=\s*([0-9.]+)"\s*$',
+                          f.read(), re.M)
+    assert found, "pyproject.toml has no requires-python = \">=N\" line"
+    minimum = found.group(1)
     source = _read("control").split("\n\n")[0]
     m = re.search(r"^X-Python3-Version:\s*>=\s*([0-9.]+)\s*$", source, re.M)
     assert m, "no X-Python3-Version in the source stanza"
