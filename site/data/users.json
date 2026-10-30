@@ -20,7 +20,7 @@
   {
     "name": "tt-orchard",
     "repo": "https://github.com/tsingletaryTT/tt-orchard",
-    "how": "Harness that brings up new models; its lease adapter calls gozer acquire, reset, release and status for each board.",
+    "how": "Harness that brings up new models; its lease adapter calls gozer acquire, reset, release and status for each lease.",
     "evidence": "orchard/adapters/gozer.py"
   },
   {
