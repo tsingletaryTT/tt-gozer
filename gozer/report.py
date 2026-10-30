@@ -2,7 +2,9 @@
 # SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
 """Turn history.jsonl into the GH Pages containment report.
 
-`docs/index.html` used to be a hand-authored snapshot: someone read
+The containment-log page (now `docs/log.html`, no longer linked from the
+site; `docs/index.html` is the explainer built by `scripts/build_site.py`)
+used to be a hand-authored snapshot: someone read
 `history.jsonl` on a given day, hand-computed a roster table, and hand-typed
 hero stats and prose straight into the HTML. That page goes stale the moment
 a new event is logged and can only be refreshed by repeating the same manual
@@ -19,7 +21,7 @@ it to pick up every day on its own.
 `history_archive.jsonl`, checked into this package, recovers the 2026-09-03
 .. 2026-09-10 window that lived only in `/tmp/tt-gozer/history.jsonl` before
 `GOZER_HISTORY_ROOT` existed -- extracted back out of the last report
-rendered before that migration (commit e756fe2's docs/index.html), since
+rendered before that migration (commit e756fe2's docs/index.html, which was the containment log then), since
 that render is the only surviving copy: `/tmp/tt-gozer` does not survive a
 reboot, and `GOZER_HISTORY_ROOT` was never actually set on this box, so the
 live log kept resetting to empty regardless. `load_archive()`/`merge_events()`

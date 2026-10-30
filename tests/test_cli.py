@@ -608,6 +608,28 @@ def test_report_writes_html_to_out_path(env, capsys, tmp_path):
     assert "{{" not in html
 
 
+def test_report_default_output_is_docs_log_html(env, capsys, monkeypatch):
+    """`gozer report` must not overwrite docs/index.html (the explainer site).
+
+    Runs from a throwaway git repo so the real repo's docs/ is never touched.
+    """
+    import subprocess
+
+    repo = env / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    monkeypatch.chdir(repo)
+    (repo / "docs").mkdir()
+
+    _, acq_out = run(["acquire", "--chips", "1", "--who", "claude:x", "--json"], capsys)
+    run(["release", json.loads(acq_out)["lease_id"]], capsys)
+
+    code, _ = run(["report"], capsys)
+    assert code == 0
+    assert (repo / "docs" / "log.html").exists()
+    assert not (repo / "docs" / "index.html").exists()
+
+
 def test_report_refuses_when_archive_and_history_are_both_empty(env, capsys, monkeypatch):
     from gozer import report
 

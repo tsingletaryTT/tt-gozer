@@ -126,14 +126,15 @@ $ gozer history -n 5
 | `env <lease>` | print export lines for a lease |
 | `run --chips N -- <command>` | acquire, run a command, always release. The release waits up to 10 s for the device to close (a fast-exiting command can leave a forked worker holding it for a moment) and refuses only if a process still holds it after that |
 | `history` [`-n N`] [`--json`] | who held what, when, for how long -- the last 20 events by default |
-| `report` [`--out PATH`] [`--json`] | regenerate the GH Pages containment-log page from `history.jsonl` |
+| `report` [`--out PATH`] [`--json`] | regenerate the containment-log page (`docs/log.html` by default) from `history.jsonl` |
 
 Every command also accepts `--json` for machine-readable output.
 
-`gozer report` turns the whole history log into `docs/index.html` -- the published
-"Containment Log" microsite -- recomputing every roster stat, hero number, and board/chip
+`gozer report` turns the whole history log into `docs/log.html` -- the old "Containment Log"
+page, which the site no longer links to -- recomputing every roster stat, hero number, and board/chip
 mapping from the live log instead of anyone hand-typing them. It never touches hardware; run it
-and commit `docs/index.html` whenever you want the published page current. `--json` prints the
+and commit `docs/log.html` if you want that page current. `docs/index.html` is a different
+page: the explainer, built by `scripts/build_site.py`, and `gozer report` never writes it. `--json` prints the
 same computed stats without rendering HTML, for scripting.
 
 ## For agents

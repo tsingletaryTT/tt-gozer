@@ -583,7 +583,7 @@ def cmd_report(args) -> int:
         return EXIT_OK
 
     html = report.render(records, source_note=gk.history_root)
-    out_path = args.out or os.path.join(_repo_root(), "docs", "index.html")
+    out_path = args.out or os.path.join(_repo_root(), "docs", "log.html")
     with open(out_path, "w") as f:
         f.write(html)
     print(f"gozer report: wrote {out_path}")
@@ -715,9 +715,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="how many recent events to show (default 20)")
 
     rp = add("report", cmd_report, "regenerate the containment-log page "
-                                   "(docs/index.html) from history.jsonl")
+                                   "(docs/log.html) from history.jsonl")
     rp.add_argument("--out", default=None,
-                    help="output path (default: docs/index.html at the repo root)")
+                    help="output path (default: docs/log.html at the repo root)")
 
     rn = add("run", cmd_run, "acquire, run a command, always release")
     rn.add_argument("--chips", default="1")
