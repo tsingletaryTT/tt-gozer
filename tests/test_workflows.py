@@ -7,12 +7,17 @@ the release is gated on the tag matching the version, only the release job can
 write to the repository, lintian fails the build, and actions are pinned.
 PyYAML parses the key `on` as the boolean True; `_triggers` handles that.
 """
+import os
 import re
 from pathlib import Path
 
 import pytest
 
-yaml = pytest.importorskip("yaml")
+# In CI a missing PyYAML must fail the run, not skip the guard.
+if os.environ.get("CI"):
+    import yaml
+else:
+    yaml = pytest.importorskip("yaml")
 
 WF = Path(__file__).resolve().parent.parent / ".github" / "workflows"
 
@@ -107,3 +112,29 @@ def test_ci_has_no_release_step():
     text = (WF / "ci.yml").read_text()
     assert "gh release" not in text
     assert "tags" not in _triggers(_load("ci.yml")).get("push", {})
+
+
+def test_ci_installs_pyyaml_so_workflow_tests_run():
+    for name in ("ci.yml", "release.yml"):
+        job = _load(name)["jobs"]["tests"]
+        pips = [s["run"] for s in job["steps"] if "pip install" in s.get("run", "")]
+        assert pips and all("pyyaml" in p.lower() for p in pips), name
+
+
+def test_every_job_sets_timeout_minutes():
+    for name in ("ci.yml", "release.yml"):
+        for jname, job in _load(name)["jobs"].items():
+            assert isinstance(job.get("timeout-minutes"), int), f"{name}:{jname}"
+
+
+def test_ci_cancels_superseded_pr_runs_and_release_has_no_concurrency():
+    ci = _load("ci.yml")
+    assert ci["concurrency"]["group"] == "ci-${{ github.ref }}"
+    assert ci["concurrency"]["cancel-in-progress"] == "${{ github.event_name == 'pull_request' }}"
+    assert "concurrency" not in _load("release.yml")
+
+
+def test_build_job_run_text_is_identical_in_ci_and_release():
+    ci = _run_text(_load("ci.yml")["jobs"]["deb"])
+    rel = _run_text(_load("release.yml")["jobs"]["build"])
+    assert ci == rel

@@ -16,6 +16,7 @@ permissions:
 jobs:
   check-tag:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -27,6 +28,7 @@ jobs:
   tests:
     needs: [check-tag]
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -37,16 +39,19 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install test dependencies
-        run: pip install pytest pytest-timeout
+        run: pip install pytest pytest-timeout pyyaml
       - name: Run the suite
         run: python -m pytest -q
 
   build:
     needs: [tests]
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     container: debian:12
     steps:
       - uses: actions/checkout@v4
+      # Keep this job's run: text identical in ci.yml and release.yml (a test
+      # enforces it); edit both files together.
       - name: Install build tools
         run: |
           apt-get update
@@ -87,6 +92,7 @@ jobs:
   install-test:
     needs: [build]
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -114,6 +120,7 @@ jobs:
   release:
     needs: [install-test]
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: write
     steps:
