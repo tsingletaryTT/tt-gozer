@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
 """The site's terminal sessions come from the real CLI, deterministically."""
+import contextlib
 import os
 import pwd
 import re
@@ -73,31 +74,79 @@ def test_first_command_shows_a_copyable_owner_pid():
     assert "owner pid 4121" in run_session()[0].output
 
 
-def _snapshot(*roots):
-    """Recursive (relative path, size, mtime_ns) for every file under roots."""
-    snap = {}
-    for root in roots:
-        for dirpath, dirs, files in os.walk(root):
-            for name in dirs + files:
-                p = os.path.join(dirpath, name)
-                st = os.lstat(p)
-                snap[p] = (st.st_size, st.st_mtime_ns)
-    return snap
+def _inside(path, base):
+    """True when path is base or lies under it (symlinks resolved)."""
+    path, base = os.path.realpath(path), os.path.realpath(base)
+    return os.path.commonpath([path, base]) == base
 
 
-def test_the_snapshot_helper_detects_a_write(tmp_path):
-    d = tmp_path / "tt-gozer"
-    d.mkdir()
-    (d / "history.jsonl").write_text("a\n")
-    before = _snapshot(d)
-    (d / "history.jsonl").write_text("a\nb\n")
-    assert _snapshot(d) != before
+def _gatekeeper_roots(monkeypatch):
+    """Record the four paths of every Gatekeeper the code under test builds."""
+    from gozer.gatekeeper import Gatekeeper
+    seen = []
+    real_init = Gatekeeper.__init__
+
+    def spy(self, *a, **kw):
+        real_init(self, *a, **kw)
+        seen.append((self.root, self.history_root, self.sysfs_root, self.proc_root))
+
+    monkeypatch.setattr(Gatekeeper, "__init__", spy)
+    return seen
 
 
-def test_the_real_state_directories_are_untouched(tmp_path, monkeypatch):
-    real_home = pwd.getpwuid(os.getuid()).pw_dir   # not $HOME: the test resets it
-    dirs = ["/tmp/tt-gozer", os.path.join(real_home, ".local/state/tt-gozer")]
-    monkeypatch.setenv("HOME", str(tmp_path))
-    before = _snapshot(*[d for d in dirs if os.path.isdir(d)])
+def test_the_session_only_reaches_its_own_temp_directory(monkeypatch):
+    seen = _gatekeeper_roots(monkeypatch)
+    tmps = []
+    real_box = transcripts._fake_box
+
+    @contextlib.contextmanager
+    def box():
+        with real_box() as tmp:
+            tmps.append(tmp)
+            yield tmp
+
+    monkeypatch.setattr(transcripts, "_fake_box", box)
     run_session()
-    assert _snapshot(*[d for d in dirs if os.path.isdir(d)]) == before
+    real_home = pwd.getpwuid(os.getuid()).pw_dir
+    live = ["/tmp/tt-gozer", os.path.join(real_home, ".local/state/tt-gozer")]
+    assert seen and len(tmps) == 1
+    for paths in seen:
+        for p in paths:
+            assert p and _inside(p, tmps[0]), p
+            assert not any(_inside(p, d) or _inside(d, p) for d in live), p
+
+
+def test_the_containment_helper_can_reject(tmp_path, monkeypatch):
+    # A Gatekeeper built with no GOZER_* variables lands on the default root.
+    # Point that default at a stand-in so nothing is created under /tmp/tt-gozer.
+    import gozer.gatekeeper as gk_mod
+    stand_in = tmp_path / "default-root"
+    monkeypatch.setattr(gk_mod, "DEFAULT_ROOT", str(stand_in))
+    for k in [k for k in os.environ if k.startswith("GOZER_")]:
+        monkeypatch.delenv(k)
+    monkeypatch.delenv("XDG_STATE_HOME", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    seen = _gatekeeper_roots(monkeypatch)
+    gk_mod.Gatekeeper()
+    session_tmp = tmp_path / "session"
+    session_tmp.mkdir()
+    assert seen and not _inside(seen[0][0], session_tmp)
+    assert _inside(seen[0][0], stand_in)
+
+
+def test_the_current_user_name_never_appears(monkeypatch):
+    real_box = transcripts._fake_box
+
+    @contextlib.contextmanager
+    def box():
+        # The session scrubs USER/LOGNAME on entry; plant a marker first.
+        monkeypatch.setenv("USER", "zz-test-user")
+        monkeypatch.setenv("LOGNAME", "zz-test-user")
+        with real_box() as tmp:
+            yield tmp
+
+    monkeypatch.setattr(transcripts, "_fake_box", box)
+    for s in run_session():
+        for text in (s.command, s.output):
+            assert "zz-test-user" not in text
+            assert "ttuser" not in text
