@@ -37,3 +37,16 @@ def test_report_template_and_archive_are_package_data():
 
 def test_requires_python_310():
     assert _load()["project"]["requires-python"] == ">=3.10"
+
+
+def test_setuptools_floor_is_old_enough_for_distro_packages():
+    # Debian 12 ships setuptools 66.x, Ubuntu 24.04 68.x; the floor must not exceed 66.
+    import re
+    (req,) = _load()["build-system"]["requires"]
+    m = re.fullmatch(r"setuptools>=(\d+)(?:\.\d+)*", req)
+    assert m and int(m.group(1)) <= 66
+
+
+def test_license_is_apache_text_form():
+    # The SPDX string form needs setuptools 77+; the table form works from 61.
+    assert _load()["project"]["license"] == {"text": "Apache-2.0"}
