@@ -161,13 +161,14 @@ $ gozer history -n 5
 | `names` [`--json`] | list boards and chips with their names, serials, ASIC ids, PCI addresses and current device indices, and flag boards that have no name and named boards that are missing |
 | `names set <name> <board>` / `names unset <name>` | name a board (by serial, PCI address, device index or an existing name), or remove a name. `set` refuses a board that is under a lease |
 | `names udev` | print udev rules for `/dev/tenstorrent/by-name/`; writes nothing |
-| `acquire` / `summon` `--chips N\|all\|LO-HI --who W` [`--owner-pid N`] | take a lease on chips |
+| `acquire` / `summon` `--chips N\|all\|LO-HI --who W` [`--owner-pid N`] [`--service NAME` [`--port P`] [`--model ID`]] | take a lease on chips; the service fields say what it will serve (also on `run`, `adopt` and `renew`) |
 | `wait <ticket>` [`--timeout 8m`] | block until a queued ticket is granted; while it waits it keeps the ticket alive and holding its boards |
 | `queue` [`--json`] | list waiting requests, and the free boards each active waiter is holding |
 | `cancel <ticket>` | drop a queue ticket |
 | `renew <lease>` [`--expect D`] | heartbeat: restarts a detached lease's 900 s grace window, so work that will not open the device for a while can keep its chips by renewing at least every 15 minutes. `--expect` also extends the advisory deadline |
 | `release` / `banish <lease>` [`--no-reset`] [`--force`] | give chips back (resets them, about 42 s). At chip grain the whole board is reset when the partner die is free. Older `tt-smi` releases opened every device while resetting, so another board showed `BUSY-UNTRACKED`; `tt-smi` 6.3.0 holds only the chips it resets |
 | `grain` [`auto`\|`board`\|`chip`] | show the lease unit, or set it for the box (refused while anything is leased or queued) |
+| `services` [`--check`] [`--live`] [`--json`] | leases that serve something (`--service`): model, port, chips, state — for a router to find them. Read-only; `--live` leaves out leases whose owner is gone; `--check` asks each for `GET /v1/models` |
 | `reset <lease>` [`--force`] | reset the lease's chips in place and keep the lease; refuses while a device is open by one of your own processes (other users' processes are not visible, see "fd truth is same-user" below); the same cross-board window applies, so supervisors should not overlap resets |
 | `reset-all --who W` [`--reason R`] | host-wide `tt-smi -r all`, under a lease on every unit. It never queues: it refuses (exit 12, naming what is in use) unless the whole box is free, so it cannot reset anyone's work. It marks units clean only if every chip reads normally afterwards, and it is the reset to use for a chip that stays unreadable. Exit 20 means tt-smi succeeded but a chip still reads all ones |
 | `reconcile` [`--sudo`] | re-derive state from kernel truth, reaping what is genuinely dead. It names each lease it reaped, and warns when a reaped lease's owner pid was dead, because a container owned by another user is invisible to an unprivileged scan (`--sudo` checks theirs too) It also reports, and logs as `fence_violation`, any process of a supervised lease holding a device outside its grant |
@@ -329,6 +330,21 @@ the last 10 minutes holds back the free boards it needs, so a `--chips all` requ
 starved by one-board jobs that keep taking each board as it frees. When chips free, the
 90-second claim window goes to the first waiter they fit. A waiter that stops polling keeps its
 place but stops holding boards, and is dropped after an hour without a poll.
+
+## Several models side by side
+
+gozer leases chips; it does not start models or route requests. To serve several models at once,
+lease each one's chips, say what it serves, and let a router find it:
+
+```bash
+gozer run --chips 1 --who me:llama --service llama-3b --port 8001 --model meta-llama/Llama-3.2-3B-Instruct -- ./serve-llama.sh --port 8001
+gozer run --chips 1 --who me:qwen  --service qwen-7b  --port 8002 -- ./serve-qwen.sh --port 8002
+gozer services --check
+```
+
+`gozer services --live --json` is the list a router reads (`~/serve-gateway/router.py` on the QB2 routes
+`/v1/*` requests by their `model` field this way). A server that opens more chips than it was
+granted shows up in `status` as outside its grant, and `gozer run` warns about it.
 
 ## The one surprising thing
 

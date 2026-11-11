@@ -860,3 +860,53 @@ Not done: no check for `--owner-pid` supervisors beyond `status`/`reconcile` (th
 process running alongside); processes of other users are invisible without `--sudo`, as for every
 fd check.
 
+## Services: leases say what they serve (2026-11-11)
+
+Prompt: Phase 4 of the audit plan, so several models side by side can sit behind one endpoint
+without a config file.
+
+* `--service NAME [--port P] [--model ID]` on `acquire`, `run`, `adopt` and `renew` (renew can name
+  it later, e.g. a supervisor that leases before it knows the port). Stored as `lease["service"]`
+  (`model` defaults to the name), carried on queue tickets and replayed by `wait`. Validated before
+  anything is leased: a port without a name, a name outside `[A-Za-z0-9._:/-]`, a port outside
+  1-65535, an empty model.
+* `gozer services [--check] [--json]`: one entry per lease with a service (name, model, port, url,
+  chips, who, state from a reap=False reconcile); read-only; skips borrowed partner locks.
+  `--check` asks `GET /v1/models` with a 1 s timeout. `status` shows "serving NAME on :P".
+* The router is not in gozer: `~/serve-gateway/router.py` (stdlib only, not under git; tests in
+  `~/serve-gateway/tests/test_router.py`) reads `gozer services --json` every few seconds, routes
+  `/v1/*` POSTs by the body's `model` (lease model, then service name; one service and no model goes
+  to it), merges `/v1/models` listing the lease model ids with each backend's own id as
+  `backend_id`, passes streams through, and reaches any backend path as `/svc/<service>/<path>`
+  (async job polling). `gateway.py` is untouched.
+* The man page now documents `grain` and `services` (the test that every command is in the man page
+  had passed for `grain` only because the word appears in prose).
+
+Hardware (dev clone, sandbox state, chip grain), 2026-11-11 17:38-17:53: four MOSS-Image v6 bundle
+servers, one per die, each under `gozer run --exact <bdf> --service moss-X --port 81XX`, behind
+the router on :18100 (:8100 belongs to another service on this box). Each process held only its own
+`/dev/tenstorrent/N`. Four concurrent 256x256/4-step jobs through the router: 39 s cold, 22 s warm,
+every image byte-identical between rounds, prompts recognisable; no fence warnings. Stopping
+moss-c (die 0) with SIGTERM reset only die 0 and marked board 1 split while moss-d (die 1) served a
+job entirely inside that reset, with output identical to before; the router dropped moss-c on its
+own. Stopping the other three at once left board 2 split (simultaneous sibling releases), which led
+to `_heal_split_boards` (see "One lease per die").
+
+A fourth independent review (tests in a scratch copy) found no path that loses the service
+record, and: `services` listed STALE leases (owner dead, unreaped) and a router routed to them, so a
+dead instance could shadow a live one of the same model; nothing stopped two live leases claiming
+one name or port; `--check` went through `$http_proxy` and followed redirects; `renew --service`
+replaced the whole record (port lost) and `--port` alone was refused; `$` let a trailing newline
+into a name and `/` was allowed though `/svc/<name>/` cannot reach it; a queued `gozer run` put its
+service on the ticket, so `wait` granted a lease advertising a server nothing starts; the state came
+from a borrowed partner lock when it sorted first. Fixes: each entry has `live` (HELD or CLAIMED)
+and `--live` leaves the rest out; a name or port in use by another live lease is refused
+(`_service_clash`); `_probe` uses `http.client` on 127.0.0.1 (no proxy, no redirect, below 500 is
+up); `renew` merges into the existing record; `fullmatch` and no `/`; `run` passes
+`service_on_ticket=False`; borrowed locks are skipped for state. `tests/test_services_review.py`
+(11); mutations (no clash check, no renew merge, `match` for `fullmatch`) each red. Router fixes are
+in `~/serve-gateway` (see its README).
+
+Not done: the router does not serialize per backend (put `gateway.py` in front of a backend that
+needs it); no auth; `--check` is a plain GET with no retry.
+

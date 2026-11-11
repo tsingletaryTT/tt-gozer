@@ -19,8 +19,14 @@ Show who holds what and who is waiting. Read\-only: it never reaps or changes st
 .B topology [--json]
 Show the chips, the boards they sit on, and the lease grain.
 .TP
-.B acquire|summon --chips N|all|LO\-HI --who WHO [--reason R] [--exact X] [--fresh] [--expect D] [--ticket T] [--no\-queue] [--owner\-pid PID]
-Take a lease on N chips, or queue a ticket if none are free (exit 10). The lease is judged by open file descriptors: a standalone lease has a 900 second grace window, and --owner\-pid makes a supervisor's pid own it instead. --fresh requires chips a real reset marked clean. --no\-queue exits at once when no chips are free, without taking a ticket.
+.B grain [auto|board|chip] [--json]
+Show the lease unit, or set it for the box. Board grain is the default on boards of two dies (p300c); chip grain leases single dies, and a release then resets the whole board when the other die is free, or marks the board split. Refused while anything is leased or queued.
+.TP
+.B services [--check] [--live] [--json]
+List leases that serve something (--service), with their model, port, chips and state, for a router. Read\-only. --live leaves out leases whose owner is gone (what a router should use); --check asks each one for GET /v1/models on 127.0.0.1. A service name or port already used by another lease is refused.
+.TP
+.B acquire|summon --chips N|all|LO\-HI --who WHO [--reason R] [--exact X] [--fresh] [--expect D] [--ticket T] [--no\-queue] [--owner\-pid PID] [--service NAME [--port P] [--model ID]]
+Take a lease on N chips, or queue a ticket if none are free (exit 10). The lease is judged by open file descriptors: a standalone lease has a 900 second grace window, and --owner\-pid makes a supervisor's pid own it instead. --fresh requires chips a real reset marked clean. --no\-queue exits at once when no chips are free, without taking a ticket. --service, --port and --model record what the lease serves, for gozer services.
 .TP
 .B wait TICKET [--timeout D]
 Block until a queued ticket is granted. Bounded (8 minutes by default) so a loop is safe.
@@ -31,11 +37,11 @@ List waiting requests.
 .B cancel TICKET
 Drop a queue ticket.
 .TP
-.B renew LEASE [--expect D]
-Restart a detached lease's grace window. --expect also extends the advisory deadline.
+.B renew LEASE [--expect D] [--service NAME [--port P] [--model ID]]
+Restart a detached lease's grace window. --expect also extends the advisory deadline; --service records what the lease serves.
 .TP
 .B release|banish LEASE [--no\-reset] [--force]
-Give the chips back and reset them with tt\-smi. A reset opens every device on the box for about 42 seconds.
+Give the chips back and reset them with tt\-smi (about 42 seconds). Older tt\-smi releases opened every device on the box during a reset; tt\-smi 6.3.0 holds only the chips it resets.
 .TP
 .B reset LEASE [--force]
 Reset the lease's chips in place and keep the lease. Refuses while one of your own processes holds a device open.
@@ -44,16 +50,16 @@ Reset the lease's chips in place and keep the lease. Refuses while one of your o
 Host\-wide tt\-smi \-r all under a lease on every unit. It never queues: it refuses unless the whole box is free.
 .TP
 .B reconcile [--sudo]
-Re\-derive state from kernel truth and reap leases whose owner is gone. --sudo also checks other users' processes.
+Re\-derive state from kernel truth and reap leases whose owner is gone. Also reports and logs any process of a supervised lease holding a device outside its grant. --sudo also checks other users' processes.
 .TP
-.B adopt TARGET --who WHO [--reason R]
+.B adopt TARGET --who WHO [--reason R] [--service NAME [--port P] [--model ID]]
 Wrap a lease around untracked running work.
 .TP
 .B env LEASE
 Print the export lines for a lease.
 .TP
-.B run [--chips N] [--who W] [--reason R] [--exact X] [--fresh] [--expect D] \-\- COMMAND...
-Acquire, run COMMAND, and always release. The release waits up to 10 seconds for the device to close.
+.B run [--chips N] [--who W] [--reason R] [--exact X] [--fresh] [--expect D] [--service NAME [--port P] [--model ID]] \-\- COMMAND...
+Acquire, run COMMAND, and always release. 5, 30 and 120 seconds after start it warns if COMMAND opened a device outside the grant. The release waits up to 10 seconds for the device to close.
 .TP
 .B history [\-n N] [--json]
 Show who held what, when, and for how long. The last 20 events by default.

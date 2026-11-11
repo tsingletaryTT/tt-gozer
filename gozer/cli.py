@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json as jsonlib
+import urllib.parse as urllib_parse
 import os
 import sys
 import time
@@ -188,6 +189,134 @@ def _queue_line(gk, i: int, e: dict) -> str:
     return line
 
 
+# No "/": a router reaches a service as /svc/<name>/<path>. fullmatch, so a
+# trailing newline is not accepted the way "$" would.
+SERVICE_NAME_RE = __import__("re").compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
+LIVE_STATES = ("HELD", "CLAIMED")
+
+
+def _add_service_args(parser) -> None:
+    parser.add_argument("--service", default=None,
+                        help="name of what this lease serves (e.g. llama-3b); "
+                        "listed by `gozer services` for a router to find")
+    parser.add_argument("--port", type=int, default=None,
+                        help="port the service listens on (with --service)")
+    parser.add_argument("--model", default=None,
+                        help="model id the service answers to, as in "
+                        "/v1/models (with --service; default: the service name)")
+
+
+def _service_from_args(args, current: dict | None = None
+                       ) -> tuple[dict | None, str | None]:
+    """(service record, None) or (None, error). No --service, no record.
+
+    `current` is the lease's existing record (renew): given fields replace
+    its fields, the rest are kept, so `renew L --port 9001` moves only the
+    port."""
+    name = getattr(args, "service", None)
+    port = getattr(args, "port", None)
+    model = getattr(args, "model", None)
+    if current and name is None and (port is not None or model is not None):
+        name = current.get("name")
+    if name is None:
+        if port is not None or model is not None:
+            return None, "--port and --model describe a --service; name it"
+        return None, None
+    if not SERVICE_NAME_RE.fullmatch(name):
+        return None, f"--service {name!r}: use letters, digits and . _ : -"
+    if port is not None and not 1 <= port <= 65535:
+        return None, f"--port {port}: not a TCP port"
+    if model is not None and not model.strip():
+        return None, "--model must not be empty"
+    if current and current.get("name") == name:
+        port = port if port is not None else current.get("port")
+        model = model or current.get("model")
+    return {"name": name, "port": port, "model": model or name}, None
+
+
+def _service_clash(gk, service: dict | None, lease_id: str | None = None) -> str | None:
+    """Another live lease already serving this name or port? Two leases
+    behind one name or port would send a router's requests to whichever it
+    found first."""
+    if not service:
+        return None
+    for lease in gk.held_units().values():
+        other = lease.get("service")
+        if not other or lease.get("borrowed_for_reset") or \
+                lease.get("lease_id") == lease_id:
+            continue
+        if other.get("name") == service["name"]:
+            return (f"service {service['name']!r} is already served by lease "
+                    f"{lease.get('lease_id')} ({lease.get('who')})")
+        if service.get("port") and other.get("port") == service["port"]:
+            return (f"port {service['port']} is already used by service "
+                    f"{other.get('name')!r} (lease {lease.get('lease_id')})")
+    return None
+
+
+def cmd_services(args) -> int:
+    """What is being served, where, on which chips -- for a router.
+
+    Read-only, like status: leases are judged with reap=False. `--check`
+    asks each service with a port for GET /v1/models (1 s timeout)."""
+    gk, _ = _make(args)
+    states = gk.reconcile(reap=False)
+    state_of = {}
+    for st in states:
+        if st.lease and not st.lease.get("borrowed_for_reset"):
+            state_of.setdefault(st.lease.get("lease_id"), st.state)
+    seen, out = set(), []
+    for lease in gk.held_units().values():
+        lid = lease.get("lease_id")
+        svc = lease.get("service")
+        if not svc or lid in seen or lease.get("borrowed_for_reset"):
+            continue
+        seen.add(lid)
+        entry = {"service": svc.get("name") or "?",
+                 "model": svc.get("model") or svc.get("name") or "?",
+                 "port": svc.get("port"),
+                 "url": (f"http://127.0.0.1:{svc['port']}"
+                         if svc.get("port") else None),
+                 "lease_id": lid, "who": lease.get("who"),
+                 "chips": lease.get("chips", []),
+                 "state": state_of.get(lid)}
+        # `live`: the lease's owner is alive (HELD or CLAIMED). A STALE lease
+        # (owner gone, not yet reaped) is listed for humans but must not be
+        # routed to.
+        entry["live"] = entry["state"] in LIVE_STATES
+        if args.live and not entry["live"]:
+            continue
+        if args.check and entry["url"]:
+            entry["up"] = _probe(entry["url"] + "/v1/models")
+        out.append(entry)
+    out.sort(key=lambda e: (e["service"] or "", e["lease_id"] or ""))
+    human = "\n".join(
+        f"{e['service']:<20} model {e['model']:<28} "
+        f"{(':' + str(e['port'])) if e['port'] else '(no port)':<8} "
+        f"chips {','.join(e['chips'])}  {e['state'] or '?'}"
+        + (("  up" if e.get("up") else "  DOWN") if "up" in e else "")
+        + f"  lease {e['lease_id']} ({e['who']})"
+        for e in out) or "(no services)"
+    _emit({"services": out}, human, args.json)
+    return EXIT_OK
+
+
+def _probe(url: str) -> bool:
+    """GET on localhost, directly: no $http_proxy, no redirects followed. Any
+    HTTP answer below 500 counts as up (a server behind an API key answers
+    401 and is still up)."""
+    import http.client
+    parts = urllib_parse.urlsplit(url)
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", parts.port, timeout=1)
+        conn.request("GET", parts.path or "/")
+        status = conn.getresponse().status
+        conn.close()
+        return status < 500
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def cmd_status(args) -> int:
     gk, _ = _make(args)
     # reap=False: `status` is documented as the safe, read-only command --
@@ -278,6 +407,10 @@ def cmd_status(args) -> int:
                       f"device still held by {who_holds}")
         if s.overstayed:
             extra += "  OVERSTAYED"
+        svc = (s.lease or {}).get("service")
+        if svc:
+            extra += (f"  serving {svc.get('name')}"
+                      + (f" on :{svc['port']}" if svc.get("port") else ""))
         for v in violations:
             if v["dev_index"] == s.chip.dev_index:
                 extra += (f"  — pid {v['pid']} of lease {v['lease_id']} "
@@ -410,6 +543,11 @@ def cmd_acquire(args) -> int:
     refused = _refuse_unreadable_exact(gk, args.exact, args.json)
     if refused is not None:
         return refused
+    service, bad = _service_from_args(args)
+    bad = bad or _service_clash(gk, service)
+    if bad:
+        _emit({"granted": False, "error": bad}, f"gozer: {bad}", args.json)
+        return EXIT_UNAVAILABLE
     # --owner-pid lets a *supervisor* (tt-station-agentd, holding a lease on
     # behalf of a container it manages) claim non-detached semantics: the
     # lease is judged by pid_alive(owner_pid) instead of the detached grace
@@ -447,7 +585,8 @@ def cmd_acquire(args) -> int:
     result = km.acquire(args.chips, who=args.who, reason=args.reason,
                         exact=args.exact, fresh=args.fresh, expect=args.expect,
                         pid=args.owner_pid, owner_pid=args.owner_pid,
-                        ticket=args.ticket, no_queue=args.no_queue)
+                        ticket=args.ticket, no_queue=args.no_queue,
+                        service=service)
     if isinstance(result, Grant):
         payload = {
             "granted": True, "lease_id": result.lease_id, "units": result.units,
@@ -526,7 +665,8 @@ def cmd_wait(args) -> int:
                 or f"{entry['min_chips']}-{entry['max_chips']}",
                 who=entry["who"], reason=entry.get("reason"),
                 exact=entry.get("exact"), fresh=entry.get("fresh", False),
-                expect=entry.get("expect"), ticket=args.ticket, pid=owner)
+                expect=entry.get("expect"), ticket=args.ticket, pid=owner,
+                service=entry.get("service"))
             if isinstance(result, Grant):
                 payload = {"granted": True, "lease_id": result.lease_id,
                            "chips": result.bdfs, "env": km.env_for(result),
@@ -580,9 +720,16 @@ def cmd_renew(args) -> int:
         return EXIT_NO_LEASE
     from gozer.gatekeeper import utcnow
     from gozer.keymaster import _deadline
+    service, bad = _service_from_args(args, current=lease.get("service"))
+    bad = bad or _service_clash(gk, service, lease_id=args.lease)
+    if bad:
+        _emit({"renewed": False, "error": bad}, f"gozer: {bad}", args.json)
+        return EXIT_UNAVAILABLE
     lease["renewed_at"] = utcnow()
     if args.expect:
         lease["expect_done"] = _deadline(args.expect)
+    if service:
+        lease["service"] = service
     gk.write_lease(lease)
     for unit in lease.get("units", []):
         gk.update_unit_lease(unit, lease)
@@ -696,6 +843,11 @@ def cmd_adopt(args) -> int:
         _emit({"adopted": False}, f"{asked} has no process holding it",
               args.json)
         return EXIT_UNAVAILABLE
+    service, bad = _service_from_args(args)
+    bad = bad or _service_clash(gk, service)
+    if bad:
+        _emit({"adopted": False, "error": bad}, f"gozer: {bad}", args.json)
+        return EXIT_UNAVAILABLE
 
     lease_id = gk.new_lease_id()
     lease = {
@@ -706,6 +858,8 @@ def cmd_adopt(args) -> int:
         "since": utcnow(), "expect_done": None,
         "reset_on_release": True, "state": "adopted",
     }
+    if service:
+        lease["service"] = service
     if not gk.claim_unit(target, lease):
         _emit({"adopted": False}, f"{asked} is already leased", args.json)
         return EXIT_UNAVAILABLE
@@ -930,10 +1084,15 @@ def cmd_run(args) -> int:
     if not args.command:
         print("nothing to run: put the command after --", file=sys.stderr)
         return EXIT_UNAVAILABLE
+    service, bad = _service_from_args(args)
+    bad = bad or _service_clash(gk, service)
+    if bad:
+        print(f"gozer: {bad}", file=sys.stderr)
+        return EXIT_UNAVAILABLE
     try:
         return km.run(args.command, chips_spec=args.chips, who=args.who,
                       reason=args.reason, exact=args.exact, fresh=args.fresh,
-                      expect=args.expect)
+                      expect=args.expect, service=service)
     except KeyboardInterrupt:
         # run()'s signal forwarder deliberately raises when a signal arrives
         # with no live child to forward it to, so control unwinds through the
@@ -1000,6 +1159,7 @@ def build_parser() -> argparse.ArgumentParser:
         a.add_argument("--ticket", default=None, help="claim against a queue ticket")
         a.add_argument("--no-queue", action="store_true",
                        help="fail instead of queueing")
+        _add_service_args(a)
         a.add_argument("--owner-pid", type=int, default=None, dest="owner_pid",
                        help="a supervisor's pid to own this lease; the lease "
                        "is non-detached and judged by that pid's liveness "
@@ -1016,11 +1176,19 @@ def build_parser() -> argparse.ArgumentParser:
     c = add("cancel", cmd_cancel, "drop a queue ticket")
     c.add_argument("ticket")
 
+    sv = add("services", cmd_services,
+             "what is being served, where, on which chips (for a router)")
+    sv.add_argument("--check", action="store_true",
+                    help="ask each service for GET /v1/models (1 s timeout)")
+    sv.add_argument("--live", action="store_true",
+                    help="only leases whose owner is alive (what a router should use)")
+
     r = add("renew", cmd_renew, "heartbeat a lease (restarts a detached lease's grace window); --expect also extends its advisory deadline")
     r.add_argument("lease")
     r.add_argument("--expect", default=None,
                    help="also move the advisory deadline; without it renew is a "
                         "heartbeat only")
+    _add_service_args(r)
 
     for name, aliases in (("release", ("banish",)),):
         rel = add(name, cmd_release, "give chips back (resets them)", aliases=aliases)
@@ -1050,6 +1218,7 @@ def build_parser() -> argparse.ArgumentParser:
                                    "or unit key")
     ad.add_argument("--who", required=True)
     ad.add_argument("--reason", default=None)
+    _add_service_args(ad)
 
     e = add("env", cmd_env, "print export lines for a lease")
     e.add_argument("lease")
@@ -1072,6 +1241,7 @@ def build_parser() -> argparse.ArgumentParser:
                     help="a name (left, right.1), BDF, device index, or unit")
     rn.add_argument("--fresh", action="store_true")
     rn.add_argument("--expect", default=None)
+    _add_service_args(rn)
     rn.add_argument("command", nargs=argparse.REMAINDER)
 
     return p

@@ -140,7 +140,9 @@ class Keymaster:
                 expect: str | None = None, pid: int | None = None,
                 ticket: str | None = None, no_queue: bool = False,
                 owner_pid: int | None = None,
-                include_degraded: bool = False):
+                include_degraded: bool = False,
+                service: dict | None = None,
+                service_on_ticket: bool = True):
         """Return a Grant, a queue-ticket dict, or None.
 
         `owner_pid` is the supervisor pid the caller asked to hold the lease
@@ -199,6 +201,7 @@ class Keymaster:
             "exact": exact, "fresh": fresh,
             "reason": reason, "expect": expect,
             "owner_pid": owner_pid,
+            "service": service if service_on_ticket else None,
         }
 
         with self.gk.critical_section():
@@ -263,6 +266,8 @@ class Keymaster:
                 "reset_on_release": True,
                 "state": "active",
             }
+            if service:
+                lease["service"] = service
 
             for unit in units:
                 if not self.gk.claim_unit(unit, lease):
@@ -1067,6 +1072,10 @@ class Keymaster:
         # reconcile can use ordinary process-death detection instead of the
         # detached grace window.
         acquire_kwargs.setdefault("pid", os.getpid())
+        # A queued `run` exits 10 and never runs its command; a ticket that
+        # carried the service would let `gozer wait` grant a lease advertising
+        # a server nothing starts.
+        acquire_kwargs.setdefault("service_on_ticket", False)
         sigs = (signal.SIGINT, signal.SIGTERM)
         previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, sigs)
         try:
