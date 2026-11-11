@@ -116,6 +116,11 @@ class ResetAllResult:
 # still there after this long is treated as real work and the refusal stands.
 # `gozer release` by hand does not wait: its caller chose the moment.
 RELEASE_SETTLE_SECONDS = 10.0
+
+# When `gozer run` looks for its command holding devices outside the grant:
+# soon after start (most servers open their devices while starting up), then
+# twice more for slow starters that load weights before opening the device.
+FENCE_CHECK_SECONDS = (5, 30, 120)
 RELEASE_SETTLE_POLL_SECONDS = 0.25
 
 
@@ -1119,7 +1124,7 @@ class Keymaster:
                     print(f"gozer run: failed to start {argv!r}: {e}",
                           file=sys.stderr)
                     return 127
-                return proc.wait()
+                return self._wait_checking_fence(proc, grant)
             finally:
                 for s, handler in previous_handlers.items():
                     signal.signal(s, handler)
@@ -1136,6 +1141,43 @@ class Keymaster:
                     print(f"gozer run: {msg}", file=sys.stderr)
         finally:
             signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+
+
+    def _wait_checking_fence(self, proc, grant: Grant) -> int:
+        """proc.wait(), checking at FENCE_CHECK_SECONDS after start that the
+        command opened no device outside its grant. A breach is warned about
+        on stderr and logged once per device; the command is left running --
+        gozer advises, it does not kill."""
+        checks = list(FENCE_CHECK_SECONDS)
+        start = self.monotonic()
+        warned: set[int] = set()
+        while True:
+            timeout = None
+            if checks:
+                timeout = max(0.0, start + checks[0] - self.monotonic())
+            try:
+                return proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                checks.pop(0)
+                try:
+                    found = self.gk.fence_violations(lease_id=grant.lease_id)
+                except Exception:  # noqa: BLE001 - a check must never kill run
+                    continue
+                for v in found:
+                    if v["dev_index"] in warned:
+                        continue
+                    warned.add(v["dev_index"])
+                    held = (f", which lease {v['held_by']} ({v['held_by_who']}) holds"
+                            if v["held_by"] else "")
+                    print(f"gozer run: WARNING: pid {v['pid']} opened device "
+                          f"{v['dev_index']} ({v['bdf']}){held} -- outside this "
+                          f"lease's grant {grant.bdfs}. Check the command's "
+                          "device settings (does it honour TT_VISIBLE_DEVICES?)",
+                          file=sys.stderr)
+                    history.log(self.gk.history_root, "fence_violation",
+                               lease_id=grant.lease_id, who=v["who"],
+                               pid=v["pid"], dev_index=v["dev_index"],
+                               bdf=v["bdf"], held_by=v["held_by"])
 
 
 def _current_user() -> str:

@@ -809,3 +809,54 @@ This happened on hardware when four MOSS-Image servers (one per die) were stoppe
 `_heal_split_boards`: a release that leaves a board split and then finds every die of it free (no
 lease, no open device) borrows them all and resets the board whole (`board_heal` in history), so
 the release that finishes last heals it, at the cost of one more reset.
+
+Two sibling dies released at the same moment each see the other leased, so both reset one die
+and the board stays split until its next whole-board reset (release of a single die later, a
+both-dies lease, a board-grain lease or reset-all all heal it). Concurrent single-die resets on
+one board are untested on hardware.
+
+## Fence check: leased processes outside their grant (2026-11-11)
+
+Prompt: Phase 3 of the audit plan. With several models side by side, the collision that matters is
+a server configured for more devices than its grant (a 4-device vLLM config on a one-board lease):
+it opens the other tenant's chips, and gozer, which only advises, showed that chip as
+`HELD-FOREIGN` or `BUSY-UNTRACKED` without saying whose process it was.
+
+* `Gatekeeper.fence_violations(fd_map=None, lease_id=None)`: for each supervised lease, processes
+  that belong to it (`lease_member`: the owner pid, its process group, or a descendant of an owner
+  above 1) holding a device outside the lease's units. Detached leases are skipped: their recorded
+  pid is the one-shot CLI's, gone or reused moments later.
+* `status` appends "pid N of lease L (who) is outside its grant" to the chip and adds
+  `fence_violations` to `--json`; still read-only (no reap, no history write).
+* `reconcile` prints and logs each as `fence_violation` (`seen_by: reconcile`); with the optional
+  5-minute timer a lasting breach is logged every run.
+* `gozer run` checks its own lease at `FENCE_CHECK_SECONDS` (5, 30, 120) after start: a warning on
+  stderr and one `fence_violation` per device. It never kills the command, and a failing check never
+  breaks `run`.
+* `gozer history` padded event names to 10 with no separator, so `fence_violation` (and the older
+  `release_record_mismatch`) ran into the first field. Now padded to 9 plus a space: same columns
+  for the short names.
+
+TDD: `tests/test_fence_check.py` (9). Mutations (flag granted devices, judge detached leases, warn
+on every check) each red; the detached test first passed under its mutation because the recorded
+pid was not in the fake /proc, and was rewritten to put it there. Hardware: `gozer run --exact
+0000:01:00.0` of a command opening `/dev/tenstorrent/0` and `/2` warned at 5 s, logged one
+`fence_violation` naming device 2, and released normally.
+
+A third independent review found false positives, each proved with a test: a process belonging to
+two leases (one supervisor owning a lease per model, or `gozer run` started under a supervised lease)
+was reported against the lease that did not cover its device; `lease_member` matched the owner's
+recorded process group, which for a `gozer run` started without job control is the launcher's, so
+the launcher's own leased device was blamed on the run; during a die-grain release the borrowed
+partner lock (same lease_id, the releaser's pid) could be taken as the lease's record, and the
+partner device being reset counted as outside the grant. Fixes: a process is reported only when no
+lease it belongs to holds the device; `lease_member` uses the owner pid and its descendants only
+(reconcile's own leniency still uses the group); `_leases_by_id` gathers every unit locked under a
+lease_id and prefers the non-borrowed record; `reconcile` logs each (lease, pid, device) breach once.
+The reviewer's four tests pass on the fix; mutations (no shared-member skip, process group back)
+each red after one test was tightened to give the two leases different groups.
+
+Not done: no check for `--owner-pid` supervisors beyond `status`/`reconcile` (they have no gozer
+process running alongside); processes of other users are invisible without `--sudo`, as for every
+fd check.
+

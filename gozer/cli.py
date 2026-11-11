@@ -204,6 +204,7 @@ def cmd_status(args) -> int:
     # that stays load-bearing there (see free_units' comment) and
     # deliberate here (reconcile is the explicit, intentional reaper).
     states = _display_order(gk, gk.reconcile(reap=False), lambda s: s.chip)
+    violations = gk.fence_violations()
     _warn_names(gk)
     payload = {
         "grain": gk.grain,
@@ -231,6 +232,7 @@ def cmd_status(args) -> int:
             for c in gk.unreadable
         ],
         "queue": _queue_view(gk, states),
+        "fence_violations": violations,
         **_names_payload(gk),
     }
     # `states` is already in display order and the unreadable chips follow it.
@@ -276,6 +278,10 @@ def cmd_status(args) -> int:
                       f"device still held by {who_holds}")
         if s.overstayed:
             extra += "  OVERSTAYED"
+        for v in violations:
+            if v["dev_index"] == s.chip.dev_index:
+                extra += (f"  — pid {v['pid']} of lease {v['lease_id']} "
+                          f"({v['who']}) is outside its grant")
         cname = gk.names.chip_name(s.chip)
         label = f"{cname:<8}" if cname else ""
         lines.append(f"  chip {s.chip.dev_index}  {s.chip.bdf}  "
@@ -643,10 +649,24 @@ def cmd_reconcile(args) -> int:
         gk.use_sudo = True
     states = gk.reconcile(reap=True)
     reaped = getattr(gk, "last_reaped", [])
+    violations = gk.fence_violations()
     payload = {"chips": [{"dev_index": s.chip.dev_index, "state": s.state}
                          for s in states],
-               "sudo": bool(args.sudo), "reaped": reaped}
+               "sudo": bool(args.sudo), "reaped": reaped,
+               "fence_violations": violations}
     human = "\n".join(f"chip {s.chip.dev_index}  {s.state}" for s in states)
+    # Log each breach once, not on every run of the optional 5-minute timer.
+    logged = {(r.get("lease_id"), r.get("pid"), r.get("dev_index"))
+              for r in history.read(gk.history_root)[-2000:]
+              if r.get("event") == "fence_violation"} if violations else set()
+    for v in violations:
+        human += (f"\noutside its grant: pid {v['pid']} of lease {v['lease_id']} "
+                  f"({v['who']}) holds device {v['dev_index']} ({v['bdf']})")
+        if (v["lease_id"], v["pid"], v["dev_index"]) in logged:
+            continue
+        history.log(gk.history_root, "fence_violation", lease_id=v["lease_id"],
+                    who=v["who"], pid=v["pid"], dev_index=v["dev_index"],
+                    bdf=v["bdf"], held_by=v["held_by"], seen_by="reconcile")
     for r in reaped:
         human += f"\nreaped lease {r['lease_id']} ({r['who']}): {r['why']}"
         if r["owner_dead"] and not args.sudo:
@@ -718,7 +738,10 @@ def _format_history_line(rec: dict) -> str:
     ts = rec.get("ts", "?")
     event = rec.get("event", "?")
     extra = "  ".join(f"{k}={rec[k]}" for k in rec if k not in ("ts", "event"))
-    return f"{ts}  {event:<10}{extra}"
+    # Pad to 9 and always add a space: identical columns for the short event
+    # names, and a long one (fence_violation, release_record_mismatch) no
+    # longer runs into its first field.
+    return f"{ts}  {event:<9} {extra}"
 
 
 def cmd_history(args) -> int:

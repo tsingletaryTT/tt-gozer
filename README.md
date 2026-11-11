@@ -170,10 +170,10 @@ $ gozer history -n 5
 | `grain` [`auto`\|`board`\|`chip`] | show the lease unit, or set it for the box (refused while anything is leased or queued) |
 | `reset <lease>` [`--force`] | reset the lease's chips in place and keep the lease; refuses while a device is open by one of your own processes (other users' processes are not visible, see "fd truth is same-user" below); the same cross-board window applies, so supervisors should not overlap resets |
 | `reset-all --who W` [`--reason R`] | host-wide `tt-smi -r all`, under a lease on every unit. It never queues: it refuses (exit 12, naming what is in use) unless the whole box is free, so it cannot reset anyone's work. It marks units clean only if every chip reads normally afterwards, and it is the reset to use for a chip that stays unreadable. Exit 20 means tt-smi succeeded but a chip still reads all ones |
-| `reconcile` [`--sudo`] | re-derive state from kernel truth, reaping what is genuinely dead. It names each lease it reaped, and warns when a reaped lease's owner pid was dead, because a container owned by another user is invisible to an unprivileged scan (`--sudo` checks theirs too) |
+| `reconcile` [`--sudo`] | re-derive state from kernel truth, reaping what is genuinely dead. It names each lease it reaped, and warns when a reaped lease's owner pid was dead, because a container owned by another user is invisible to an unprivileged scan (`--sudo` checks theirs too) It also reports, and logs as `fence_violation`, any process of a supervised lease holding a device outside its grant |
 | `adopt <target> --who W` | wrap a lease around untracked running work |
 | `env <lease>` | print export lines for a lease |
-| `run --chips N -- <command>` | acquire, run a command, always release. The release waits up to 10 s for the device to close (a fast-exiting command can leave a forked worker holding it for a moment) and refuses only if a process still holds it after that |
+| `run --chips N -- <command>` | acquire, run a command, always release. The release waits up to 10 s for the device to close (a fast-exiting command can leave a forked worker holding it for a moment) and refuses only if a process still holds it after that. 5, 30 and 120 s after start it checks that the command opened no device outside the grant, and warns (once per device, never kills) if it did |
 | `history` [`-n N`] [`--json`] | who held what, when, for how long -- the last 20 events by default |
 | `report` [`--out PATH`] [`--json`] | regenerate the containment-log page (`docs/log.html` by default inside a git checkout; `--out` is needed elsewhere) from `history.jsonl` |
 
@@ -371,7 +371,11 @@ resets the whole board and clears the mark.
 
 **Advisory, not enforced.** Device nodes are `crw-rw-rw-`; any process can ignore gozer
 entirely. What gozer guarantees is that ignoring it is *visible* — such a chip shows as
-`BUSY-UNTRACKED` and is never handed to anyone else.
+`BUSY-UNTRACKED` and is never handed to anyone else. The same holds inside a lease: when a process of a
+supervised lease (`gozer run`, or `--owner-pid`) opens a device outside its grant, `status`
+names the lease next to that chip ("pid N of lease L is outside its grant"), `gozer run`
+warns, and `reconcile` logs it. This is the usual way side-by-side models collide: a server
+configured for more devices than it was granted.
 
 **Leases are not owned.** Any local user can release, renew or reap any lease — nothing
 checks who took it. That is deliberate, not an omission: releasing someone else's abandoned

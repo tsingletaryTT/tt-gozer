@@ -550,6 +550,87 @@ class Gatekeeper:
             return setting
         return lease_grain(self.boards)
 
+    # ---- fence check --------------------------------------------------------
+
+    def lease_member(self, pid: int, lease: dict) -> bool:
+        """Does `pid` belong to this supervised lease: its owner or a
+        descendant of the owner? Detached leases have no live owner to judge
+        by, so nothing belongs to them.
+
+        The owner's process group is deliberately not used here (reconcile
+        still uses it to be lenient): when `gozer run` is started without
+        job control its group belongs to whatever launched it, and that
+        launcher is not part of the lease."""
+        if lease.get("detached"):
+            return False
+        owner = lease.get("pid")
+        if pid == owner:
+            return True
+        return (owner is not None and owner > 1
+                and procfd.is_descendant(pid, owner, self.proc_root))
+
+    def _leases_by_id(self) -> dict[str, tuple[dict, set[str]]]:
+        """{lease_id: (its own record, every unit locked under that id)}.
+
+        A die-grain release borrows the partner die under the releasing
+        lease's id with a copy of the record (`borrowed_for_reset`). That
+        unit counts as the lease's for the duration, and the copy is never
+        taken as the lease's own record (its pid is the releasing process)."""
+        out: dict[str, tuple[dict, set[str]]] = {}
+        for unit, lease in self.held_units().items():
+            lid = lease.get("lease_id")
+            if not lid:
+                continue
+            record, units = out.get(lid, (None, set()))
+            units.add(unit)
+            if record is None or (record.get("borrowed_for_reset")
+                                  and not lease.get("borrowed_for_reset")):
+                record = lease
+            out[lid] = (record, units)
+        return out
+
+    def fence_violations(self, fd_map: dict | None = None,
+                         lease_id: str | None = None) -> list[dict]:
+        """Processes of a supervised lease holding a device outside its grant.
+
+        A lease only advises: a server configured for four devices on a
+        one-board grant opens the neighbour's chips anyway, and with several
+        models side by side that is the collision that matters. Each entry
+        names the lease, the process, the device it should not have, and who
+        (if anyone) holds that device's unit. `lease_id` limits the check to
+        one lease (`gozer run` checks its own child).
+
+        A process can belong to several leases (one supervisor owning a lease
+        per model, or `gozer run` started under a supervised lease). It is
+        only reported when no lease it belongs to covers the device."""
+        if fd_map is None:
+            fd_map = procfd.holders(self.proc_root, use_sudo=self.use_sudo)
+        leases = self._leases_by_id()
+        unit_owner = {u: lid for lid, (_, units) in leases.items() for u in units}
+        by_index = {c.dev_index: c for c in all_chips(self.boards)}
+        out = []
+        for lid, (lease, units) in leases.items():
+            if lease_id is not None and lid != lease_id:
+                continue
+            granted = {c.dev_index for u in units for c in self.chips_in_unit(u)}
+            for dev, pids in sorted(fd_map.items()):
+                if dev in granted:
+                    continue
+                chip = by_index.get(dev)
+                holder_id = unit_owner.get(self.unit_key_for(chip)) if chip else None
+                holder = leases[holder_id][0] if holder_id else None
+                for pid in pids:
+                    if not self.lease_member(pid, lease):
+                        continue
+                    if holder is not None and self.lease_member(pid, holder):
+                        continue          # it is that lease's process too
+                    out.append({
+                        "lease_id": lid, "who": lease.get("who"), "pid": pid,
+                        "dev_index": dev, "bdf": chip.bdf if chip else None,
+                        "held_by": holder_id,
+                        "held_by_who": (holder or {}).get("who")})
+        return out
+
     # ---- grain setting ------------------------------------------------------
 
     GRAIN_SETTINGS = ("auto", "board", "chip")
