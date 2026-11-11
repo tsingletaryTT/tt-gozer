@@ -156,9 +156,11 @@ lease before running it yourself.
 
 ## Open
 
-* Hardware spike: does resetting one ASIC perturb a live neighbour's eth links?
+* ~~Hardware spike: does resetting one ASIC perturb a live neighbour's eth links?~~ Answered
+  2026-11-11, see "One lease per die".
 * Fix `tt-hardware-primer`.
-* Revisit per-chip leases if two concurrent tenants proves too few.
+* ~~Revisit per-chip leases if two concurrent tenants proves too few.~~ `gozer grain chip`,
+  2026-11-11.
 * **Backend-agnostic gozer.** Today the gate *is* the filesystem: locks, fd truth, and a
   mutex under `GOZER_ROOT`. Floated 2026-08-24 -- factor that behind an interface so the
   same `acquire`/`release`/`status` surface could sit on top of a durable queue service
@@ -738,3 +740,72 @@ Not done: the window is still exclusive, so while a fitting ticket holds it, ano
 fits the remaining units waits up to 90 s. An unknown `--ticket` that fits free, unreserved chips is
 granted rather than refused with 13 (as before this change).
 
+## One lease per die: hardware findings and `gozer grain` (2026-11-11)
+
+Prompt: after the queue PR, "build the rest of the audit into a plan", then "run the test" on
+the hardware questions behind per-die leases and reset isolation.
+
+Measured on this box (2x p300c, ttnn 0.80.0 from the moss-image v6 bundle venv, tt-smi 6.3.0,
+firmware 19.15.0, KMD 2.10.1), with a self-checking load (the same matmul repeated, every
+result compared bit for bit with the first) and a 1x2 FABRIC_1D all_gather loop:
+
+* `TT_VISIBLE_DEVICES=<one BDF>` opens only that die: UMD logs "Opening local chip ids/PCIe
+  ids: {0}/[2]", "Using CUSTOM cluster type for P300 board with 1 chips", and the process
+  holds only that `/dev/tenstorrent/N`. With nothing else set, tt-metal stops with "Custom
+  fabric mesh graph descriptor path must be specified"; `TT_METAL_VISIBLE_DEVICES=0` plus
+  ttnn's `p150_mesh_graph_descriptor.textproto` opens it (v6 bundles' run.sh does this). This
+  overturns "UMD expands TT_VISIBLE_DEVICES to the whole board" for this UMD.
+* Two processes, one per die of one board, 60 s side by side: about 62k iterations each, all
+  identical, worst 7 ms.
+* `tt-smi -r` of one die while its partner runs: the partner's work is untouched (150k
+  iterations, worst 6 ms; repeated twice more). But the die-to-die link goes down: a 1x2 mesh
+  on that board then reports a 1x1 system mesh until the whole board is reset. Once in three,
+  the partner's next fresh open failed ("Timeout waiting for physical cores to finish: 23-25",
+  "failed to initialize FW") until the partner was reset; not reproduced in five later tries.
+* `tt-smi -r` of a whole board while the other board runs single-die work or a 1x2 fabric mesh:
+  untouched (760k all_gathers, worst 6 ms), and both boards' meshes reopen afterwards. A fresh
+  open of the other board during the reset works.
+* `tt-smi` 6.3.0 holds only the devices it resets (traced every 50 ms over a reset: [0], [1],
+  then [0, 1] for 60 ms). The README's "opens every device for 42 s" was older tt-smi.
+
+Built from that (branch `die-grain`, stacked on the queue PR):
+* `gozer grain [auto|board|chip]`. The setting is a file in GOZER_ROOT, not an env var, so
+  every gozer on the box agrees on the lease unit; changing it is refused while anything is
+  leased or queued. `auto` keeps the derived default (board on p300c).
+* At chip grain, release resets the whole board when the partner die has no lease and no open
+  device: the partner is locked under the releasing lease's id for the reset, marked clean and
+  unlocked. Otherwise only the released die is reset and the board is marked split
+  (`gate/<serial>.split`). A whole-board release or in-place reset clears the mark; an in-place
+  reset of one die sets it. `status` shows split boards and `(set)` on a set grain; a one-die
+  grant says which env the tenant needs; a both-dies grant on a split board says to reset first.
+* `tests/test_die_grain.py` (14); five mutations each red. Hardware: four tenants, one per die,
+  120 s each, all clean; single-die release with the partner leased reset one die and marked the
+  board split; the partner's release reset the whole board, cleared the mark, and a 1x2 mesh then
+  formed on it.
+
+A second independent review (fresh subagent, proving tests run on a `git archive` copy) found no
+lock leak and no race between the partner free-check and its claim, and eight bookkeeping bugs:
+a both-dies lease, a board-grain release and `reset-all` never cleared a split mark; a board reset
+whole was marked split when another board of the same lease had a busy partner; partners were
+borrowed all-or-nothing across boards; clean markers keyed under the old grain survived a grain
+switch, so `--fresh` could get a dirty die; the borrowed partner lock carried the releaser's record,
+so with a dead owner or an aged detached lease it was STALE at once and could be reaped and
+re-granted mid-reset, then marked clean under the new tenant; an interrupt during the reset left the
+partner locked. Fixes: `Gatekeeper.settle_split(reset_bdfs)` decides every touched board by what
+was actually reset (all its dies: clear; some: mark), used by release, in-place reset and
+reset-all; partners are borrowed per board; `set_grain` deletes all `*.clean` markers; the borrowed
+lock is owned by the releasing process (`pid` = its own, not detached, fresh `since`,
+`borrowed_for_reset`); a partner is marked clean only if its lock is still ours; a `finally` drops
+borrowed locks on any exit; a partner already locked under our own id (a killed release) is ours to
+reset. Ten tests added to `tests/test_die_grain.py` (24 in all); the reviewer's eight bug-asserting
+tests all fail on the fixed code; three mutations (borrowed lock = original record, clean without
+the ownership check, no finally) each red.
+
+Not done: the "partner's next open failed" case is handled only by the split mark and the next
+whole-board reset; gozer does not reset a die on grant. `eth_neighbours` warnings are unchanged.
+Two sibling dies released at the same moment each see the other leased, so both reset one die.
+This happened on hardware when four MOSS-Image servers (one per die) were stopped together: board
+2 ended split, and the two single-die resets ran concurrently on one board without error. Fixed by
+`_heal_split_boards`: a release that leaves a board split and then finds every die of it free (no
+lease, no open device) borrows them all and resets the board whole (`board_heal` in history), so
+the release that finishes last heals it, at the cost of one more reset.

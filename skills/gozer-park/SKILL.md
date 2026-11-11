@@ -143,11 +143,12 @@ covers only your own processes.
 
 ## Resets touch the whole box
 
-`tt-smi -r` opens every device on the box while it resets. During a `gozer reset` or
-`gozer release`, which took about 42 seconds here, the other board shows `BUSY-UNTRACKED` in
-`gozer status`, with the `tt-smi` process as holder. A neighbour's preflight or `gozer acquire` sees
-that board as busy for that time. Do not preflight or acquire a board while another board's
-reset is running. Retry after it ends. Two supervisors should not overlap their resets.
+Older `tt-smi` releases opened every device on the box while resetting, so during a `gozer
+reset` or `gozer release` (about 42 seconds) the other board showed `BUSY-UNTRACKED` and a
+neighbour's preflight or `acquire` saw it as busy. `tt-smi` 6.3.0 holds only the chips it
+resets, and the other board can be opened during the reset (measured 2026-11-11). On an older
+`tt-smi`, do not preflight or acquire a board while another board's reset is running.
+Two supervisors should still not overlap their resets.
 
 ## Measured timings
 

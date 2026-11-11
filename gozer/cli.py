@@ -207,6 +207,9 @@ def cmd_status(args) -> int:
     _warn_names(gk)
     payload = {
         "grain": gk.grain,
+        "grain_setting": gk.grain_setting(),
+        "split_boards": sorted(b.serial for b in gk.boards
+                               if gk.is_split(b.serial)),
         "chips": [
             {"dev_index": s.chip.dev_index, "bdf": s.chip.bdf,
              "board": s.chip.serial, "card": s.chip.card, "state": s.state,
@@ -234,15 +237,19 @@ def cmd_status(args) -> int:
     # Without a names file that order is device index, so merge them as before.
     if not gk.names.file.boards or gk.names_error is not None:
         payload["chips"].sort(key=lambda c: c["dev_index"])
-    lines = [f"grain: {gk.grain}   ({len(gk.boards)} boards, "
+    setting = gk.grain_setting()
+    lines = [f"grain: {gk.grain}" + (f" (set)" if setting != "auto" else "")
+             + f"   ({len(gk.boards)} boards, "
              f"{len(states) + len(gk.unreadable)} chips)"]
     current_board = None
     for s in states:
         if s.chip.serial != current_board:
             current_board = s.chip.serial
             bname = gk.names.board_name(current_board)
+            split = ("  — dies reset separately: a mesh over both needs a "
+                     "whole-board reset" if gk.is_split(current_board) else "")
             lines.append(f"board {bname + '  ' if bname else ''}"
-                         f"{current_board}  ({s.chip.card})")
+                         f"{current_board}  ({s.chip.card}){split}")
         who = (s.lease or {}).get("who", "")
         pid = (s.lease or {}).get("pid", "")
         extra = f"  {who} pid {pid}" if who else ""
@@ -324,12 +331,56 @@ def cmd_topology(args) -> int:
     return EXIT_OK
 
 
+def _die_notes(gk, units: list[str]) -> list[str]:
+    """What a chip-grain grant on a multi-die board needs the tenant to know."""
+    notes = []
+    if gk.grain != "chip":
+        return notes
+    boards: dict[str, list[str]] = {}
+    for u in units:
+        board = gk.board_of(u)
+        if board is not None and len(board.chips) > 1:
+            boards.setdefault(board.serial, []).append(u)
+    for serial, mine in boards.items():
+        board = next(b for b in gk.boards if b.serial == serial)
+        if len(mine) < len(board.chips):
+            notes.append(
+                f"one die of {board.card} board {serial}: open it with "
+                "TT_METAL_VISIBLE_DEVICES=0 and TT_MESH_GRAPH_DESC_PATH set to "
+                "ttnn's p150_mesh_graph_descriptor.textproto (a v6 bundle's "
+                "run.sh does both)")
+        elif gk.is_split(serial):
+            notes.append(
+                f"board {serial} had its dies reset separately; a mesh over "
+                "both dies needs a whole-board reset first: gozer reset <lease>")
+    return notes
+
+
+def cmd_grain(args) -> int:
+    gk, _ = _make(args)
+    if args.value is not None:
+        why = gk.set_grain(args.value)
+        if why:
+            _emit({"ok": False, "reason": why}, f"gozer: not changed: {why}",
+                  args.json)
+            return EXIT_UNAVAILABLE
+    from gozer.topology import lease_grain
+    payload = {"grain": gk.grain, "setting": gk.grain_setting(),
+               "derived": lease_grain(gk.boards)}
+    human = (f"grain: {payload['grain']}   setting: {payload['setting']}   "
+             f"derived from the boards: {payload['derived']}")
+    _emit(payload, human, args.json)
+    return EXIT_OK
+
+
 def _render_grant(grant: Grant, gk, owner_pid: int | None = None) -> str:
     idx = ",".join(str(i) for i in grant.dev_indices)
     lines = [f"granted: chips {idx}  (units {', '.join(grant.units)})"]
     if grant.expanded:
-        lines.append(f"  note: asked for {grant.requested} — UMD expands "
-                     "TT_VISIBLE_DEVICES to the whole board")
+        lines.append(f"  note: asked for {grant.requested} — leases here are "
+                     "whole boards, so you get every chip on it")
+    for note in _die_notes(gk, grant.units):
+        lines.append(f"  note: {note}")
     lines.append(f"  export TT_VISIBLE_DEVICES={','.join(grant.bdfs)}")
     lines.append(f"  lease {grant.lease_id}   release with: "
                  f"gozer release {grant.lease_id}")
@@ -892,6 +943,10 @@ def build_parser() -> argparse.ArgumentParser:
     # that is accepted and never read is the same defect as the old --sudo
     # placebo, so it is not offered.
     add("topology", cmd_topology, "chips, boards, and the lease grain")
+    gp = add("grain", cmd_grain,
+             "show the lease unit; `gozer grain chip|board|auto` sets it for the box")
+    gp.add_argument("value", nargs="?", choices=["auto", "board", "chip"],
+                   help="set the grain (refused while anything is leased or queued)")
 
     nm = add("names", cmd_names,
              "give boards names that survive reboots; list them")

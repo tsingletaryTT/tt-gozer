@@ -166,7 +166,8 @@ $ gozer history -n 5
 | `queue` [`--json`] | list waiting requests, and the free boards each active waiter is holding |
 | `cancel <ticket>` | drop a queue ticket |
 | `renew <lease>` [`--expect D`] | heartbeat: restarts a detached lease's 900 s grace window, so work that will not open the device for a while can keep its chips by renewing at least every 15 minutes. `--expect` also extends the advisory deadline |
-| `release` / `banish <lease>` [`--no-reset`] [`--force`] | give chips back (resets them); the reset opens every device on the box for about 42 s, so another board shows `BUSY-UNTRACKED` meanwhile. Do not preflight or acquire a board while another board's reset runs |
+| `release` / `banish <lease>` [`--no-reset`] [`--force`] | give chips back (resets them, about 42 s). At chip grain the whole board is reset when the partner die is free. Older `tt-smi` releases opened every device while resetting, so another board showed `BUSY-UNTRACKED`; `tt-smi` 6.3.0 holds only the chips it resets |
+| `grain` [`auto`\|`board`\|`chip`] | show the lease unit, or set it for the box (refused while anything is leased or queued) |
 | `reset <lease>` [`--force`] | reset the lease's chips in place and keep the lease; refuses while a device is open by one of your own processes (other users' processes are not visible, see "fd truth is same-user" below); the same cross-board window applies, so supervisors should not overlap resets |
 | `reset-all --who W` [`--reason R`] | host-wide `tt-smi -r all`, under a lease on every unit. It never queues: it refuses (exit 12, naming what is in use) unless the whole box is free, so it cannot reset anyone's work. It marks units clean only if every chip reads normally afterwards, and it is the reset to use for a chip that stays unreadable. Exit 20 means tt-smi succeeded but a chip still reads all ones |
 | `reconcile` [`--sudo`] | re-derive state from kernel truth, reaping what is genuinely dead. It names each lease it reaped, and warns when a reaped lease's owner pid was dead, because a container owned by another user is invisible to an unprivileged scan (`--sudo` checks theirs too) |
@@ -331,25 +332,40 @@ place but stops holding boards, and is dropped after an hour without a poll.
 
 ## The one surprising thing
 
-**Asking for one chip may correctly get you two.**
+**By default, asking for one chip on a p300c gets you two.**
 
-On a p300c, requesting one chip through UMD's constrained-device / visibility path may expose
-**both** chips on the same board. UMD expands `TT_VISIBLE_DEVICES` to every chip on a board
-holding two chips or fewer (`cluster_descriptor.cpp: create_constrained_cluster_descriptor`).
+A p300c board carries two dies joined by an on-board Ethernet link. gozer leases the whole
+board there by default (**board grain when boards hold ≤2 chips, chip grain otherwise**), so
+a QuietBox supports two concurrent tenants, a p150 host one per card, and a Galaxy one per
+chip, with no configuration. When your grant is wider than your request, the output says so.
 
-The caveat matters: direct TTNN device access can still open a single enumerated chip. So
-single-chip work is not impossible — but `TT_VISIBLE_DEVICES`, the mechanism you would
-normally reach for to fence a workload, **does not fence below board granularity** on such a
-board.
+The original reason was that UMD might widen `TT_VISIBLE_DEVICES` to the whole board. On
+this box that is not what happens (measured 2026-11-11: ttnn 0.80.0, tt-smi 6.3.0, firmware
+19.15.0, KMD 2.10.1):
 
-That is precisely why gozer leases the board. A single-chip lease would be one you cannot
-enforce: set `TT_VISIBLE_DEVICES` to one chip and the process may still see its neighbour's.
-Handing out the pair is the only grant that means what it says.
+- `TT_VISIBLE_DEVICES` set to one die's BDF opens **only that die**; the process holds only
+  that `/dev/tenstorrent/N`. tt-metal then needs `TT_METAL_VISIBLE_DEVICES=0` and
+  `TT_MESH_GRAPH_DESC_PATH` pointing at ttnn's `p150_mesh_graph_descriptor.textproto`, which
+  a v6 tt-model bundle's `run.sh` sets for you.
+- Two processes, one per die of the same board, run side by side.
+- Resetting one board does not disturb work on the other, including a two-die mesh with
+  fabric traffic, and the other board can be opened while the reset runs.
+- Resetting **one die** leaves single-die work on its partner running, but takes the
+  die-to-die link down: a mesh over both dies does not form again until the whole board is
+  reset. Once, the partner's next fresh open also failed until the partner was reset.
 
-gozer derives this from the same predicate rather than assuming a layout: **board grain when
-boards hold ≤2 chips, chip grain otherwise.** So a QuietBox supports two concurrent tenants,
-a p150 host one per card, and a Galaxy one per chip, with no configuration. When your grant
-is wider than your request, the output says so instead of quietly rounding.
+So one lease per die works, as an opt-in for the box:
+
+```bash
+gozer grain chip     # lease single dies; refused while anything is leased or queued
+gozer grain auto     # back to the derived default
+```
+
+At chip grain, releasing a die resets the **whole board** when the partner die is free (it is
+locked for the reset and marked clean). When the partner is in use, only your die is reset
+and the board is marked split: `status` says so, and a grant of both dies on a split board
+says to run `gozer reset <lease>` before forming a mesh. The partner's own release later
+resets the whole board and clears the mark.
 
 ## What it guarantees, and what it doesn't
 

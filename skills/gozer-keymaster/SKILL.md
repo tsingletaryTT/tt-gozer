@@ -37,13 +37,14 @@ Read the output. Three things matter:
 
 1. **The export line.** Run it, or pass the value through to your process.
    `TT_VISIBLE_DEVICES` is BDFs, not indices.
-2. **The expansion note.** On a 2-chip board (a p300c QuietBox) asking for 1 chip
-   grants 2. Requesting one chip through UMD's constrained-device / visibility
-   path may expose both chips on the same board, so `TT_VISIBLE_DEVICES` cannot
-   fence you to one of them. You got both; that is correct, not a bug. Direct
-   TTNN device access *can* open a single enumerated chip — but a lease scoped
-   narrower than the fence that enforces it would be a lease in name only, so
-   gozer grants the pair.
+2. **The expansion note.** By default a 2-chip board (a p300c QuietBox) is leased
+   whole: asking for 1 chip grants 2. That is correct, not a bug. If the box is set
+   to one lease per die (`gozer grain` says `chip`), you get one die instead, and
+   the grant says what your process needs to open it alone:
+   `TT_METAL_VISIBLE_DEVICES=0` and `TT_MESH_GRAPH_DESC_PATH` pointing at ttnn's
+   `p150_mesh_graph_descriptor.textproto` (a v6 tt-model bundle's `run.sh` sets
+   both). A grant of both dies on a board marked split needs `gozer reset <lease>`
+   before a mesh over both dies will form.
 3. **Any eth-neighbour warning.** It means another tenant shares your board's
    hardwired mesh and your reset on release may perturb them. Proceed, but say so
    if something odd happens to them.
