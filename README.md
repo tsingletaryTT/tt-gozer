@@ -328,7 +328,8 @@ position, so a loop is always safe.
 The queue is first come, first served, including for big requests. A waiter that has polled in
 the last 10 minutes holds back the free boards it needs, so a `--chips all` request is not
 starved by one-board jobs that keep taking each board as it frees. When chips free, the
-90-second claim window goes to the first waiter they fit. A waiter that stops polling keeps its
+90-second claim window goes to the first waiter they fit; while it is open, other waiters can
+still take boards that waiter does not need. A `--ticket` that is no longer queued exits 13. A waiter that stops polling keeps its
 place but stops holding boards, and is dropped after an hour without a poll.
 
 ## Several models side by side
@@ -384,6 +385,11 @@ says to run `gozer reset <lease>` before forming a mesh. The partner's own relea
 resets the whole board and clears the mark.
 
 ## What it guarantees, and what it doesn't
+
+**A crashed tenant's chips are flagged.** A lease reaped because its process died gives its
+chips back without a reset. The next grant of those chips says so ("came back from a crashed
+lease without a reset", and `unreset` in `--json`) and names `gozer reset <lease>` to clean
+them; any later reset clears the flag.
 
 **Advisory, not enforced.** Device nodes are `crw-rw-rw-`; any process can ignore gozer
 entirely. What gozer guarantees is that ignoring it is *visible* — such a chip shows as

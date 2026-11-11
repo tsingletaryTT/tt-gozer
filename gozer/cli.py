@@ -520,6 +520,9 @@ def _render_grant(grant: Grant, gk, owner_pid: int | None = None) -> str:
                      "whole boards, so you get every chip on it")
     for note in _die_notes(gk, grant.units):
         lines.append(f"  note: {note}")
+    if grant.unreset:
+        lines.append(f"  note: {', '.join(grant.unreset)} came back from a crashed lease "
+                     f"without a reset; for clean silicon run: gozer reset {grant.lease_id}")
     lines.append(f"  export TT_VISIBLE_DEVICES={','.join(grant.bdfs)}")
     lines.append(f"  lease {grant.lease_id}   release with: "
                  f"gozer release {grant.lease_id}")
@@ -593,6 +596,7 @@ def cmd_acquire(args) -> int:
             "chips": result.bdfs, "dev_indices": result.dev_indices,
             "expanded": result.expanded, "requested": result.requested,
             "neighbours": result.neighbours,
+            "unreset": result.unreset,
             "owner_pid": args.owner_pid,
             "env": km.env_for(result),
         }
@@ -635,7 +639,11 @@ def cmd_wait(args) -> int:
         if last_touch is None or time.monotonic() - last_touch >= 30:
             gk.touch_ticket(args.ticket)
             last_touch = time.monotonic()
-        if gk.may_claim(args.ticket):
+        # Always try: an open claim window no longer blocks other waiters
+        # (acquire reserves the window holder's units and lets everyone else
+        # take the rest), so polling only when may_claim() is true would make
+        # a waiter sit out someone else's 90-second window for nothing.
+        if True:
             # No explicit pid here either -- same detached lease as
             # cmd_acquire (see its comment). `wait` claims on behalf of
             # whichever CLI invocation originally enqueued the ticket, and

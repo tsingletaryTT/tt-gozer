@@ -118,7 +118,8 @@ and roughly what fixing it would take.
   refuse a unit that is mid-release. Not attempted here: it is a state-format
   change, and the reap would need a staleness rule for a crashed releaser.
   `reset` has the same window and reports it as exit 18.
-* **After a reap, nothing ever resets those chips.** The reap has never reset,
+* **After a reap, nothing ever resets those chips.** *(2026-11-11: still true, but the next tenant
+  is now told; see "Cleanups".)* The reap has never reset,
   and `release` now correctly declines to reset a unit it no longer holds, so a
   crashed workload's silicon goes to the next plain `acquire` un-reset. `--fresh`
   is correctly protected (it only takes units a real reset marked clean), and the
@@ -909,4 +910,33 @@ in `~/serve-gateway` (see its README).
 
 Not done: the router does not serialize per backend (put `gateway.py` in front of a backend that
 needs it); no auth; `--check` is a plain GET with no retry.
+
+## Cleanups: unknown tickets, crashed tenants, the claim window, history (2026-11-11)
+
+Prompt: Phase 6 of the audit plan.
+
+* **Unknown `--ticket` exits 13 up front.** Before, a ticket no longer in the queue was only refused
+  when it had to queue; with chips free it was granted, past everyone waiting, while the skills say
+  it exits 13.
+* **Reaped units are flagged.** The reap writes `gate/<unit>.unreset`; a grant that includes such a
+  unit says so (text note naming `gozer reset <lease>`, `unreset` in `--json`, `Grant.unreset`).
+  `mark_clean` (any successful release reset or reset-all) and a successful in-place `gozer reset`
+  clear it. The reap still does not reset (it runs inside acquire and status-adjacent paths and
+  would add tens of seconds); this makes the known limitation visible instead of silent.
+* **The claim window no longer blocks everyone else.** `acquire` no longer refuses on
+  `may_claim`; the window holder counts as active in `plan_queue` (`force_active`), so its units stay
+  reserved even if its last poll ages past `RESERVE_ACTIVE_SECONDS` mid-window, and anyone may take
+  units it does not need. `gozer wait` now tries `acquire` on every poll instead of only when
+  `may_claim` is true (otherwise a waiter would still sit out another ticket's window). Expiry still
+  sends an unclaimed holder to the back.
+* **History merged on this box (data, not code).** `/tmp/tt-gozer/history.jsonl` held 991 events
+  (2026-10-07..11-05) not in `~/.local/state/tt-gozer/history.jsonl` (225 events from 11-09); the
+  October migration recorded above did not survive whatever reset the state directory. Merged and
+  de-duplicated to 1203 events; the previous file is `history-backup-2026-11-11.jsonl`.
+
+TDD: `tests/test_cleanup.py` (6). Mutations (no reap marker, grant an unknown ticket, in-place reset
+keeps the flag, wait gated on the window, acquire exclusive on the window, holder not forced active)
+each red.
+
+Not done: priorities between kinds of work (no contention in the history that would justify them).
 

@@ -57,6 +57,8 @@ class Grant:
     requested: int
     expanded: bool = False
     neighbours: dict[str, str] = field(default_factory=dict)
+    # Units whose previous lease was reaped, so nothing reset them.
+    unreset: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -206,16 +208,28 @@ class Keymaster:
 
         with self.gk.critical_section():
             self.gk.prune_queue()
+            if ticket and not any(e.get("ticket") == ticket
+                                  for e in self.gk.queue_entries()):
+                # A ticket that is not queued (cancelled, granted, or aged
+                # out) is an error whether or not chips happen to be free:
+                # granting it would let a stale caller skip everyone who is
+                # waiting, and the skills tell callers it exits 13.
+                raise TicketNotFound(
+                    f"ticket {ticket} is not in the queue -- it was cancelled, "
+                    "granted, or abandoned long enough to be pruned; acquire "
+                    "again to take a new one")
             if ticket:
                 # Every replay of a ticket is its waiter polling: keep it
                 # alive and keep its reservation (queue.RESERVE_ACTIVE_SECONDS).
                 self.gk.touch_ticket(
                     ticket, min_interval=queue_mod.TOUCH_MIN_INTERVAL_SECONDS)
 
-            # A ticket-holder outside its claim window must wait its turn, and a
-            # newcomer must not jump an open window.
-            if not self.gk.may_claim(ticket):
-                return self._queue_or_refuse(ticket, request, no_queue)
+            # An open claim window no longer blocks everyone else: the window
+            # holder's units are reserved for it below (it counts as active
+            # while its window is open), and anyone may take units it does
+            # not need. Expiry still sends an unclaimed holder to the back.
+            window = self.gk.expire_and_get_claim_holder()
+            force_active = frozenset([window]) if window else frozenset()
 
             free = self.gk.free_units(include_degraded=include_degraded)
             # Units held back for active tickets ahead of this caller: every
@@ -236,7 +250,8 @@ class Keymaster:
                 # An unknown ticket is a newcomer: every reservation applies.
                 # (It is refused as TicketNotFound if it does not fit anyway.)
                 reserved, _ = self.gk.plan_queue(free=free,
-                                                 before_seq=own_seq)
+                                                 before_seq=own_seq,
+                                                 force_active=force_active)
             units = self.gk.allocate(min_chips, max_chips, exact=exact, fresh=fresh,
                                      include_degraded=include_degraded,
                                      exclude=reserved, free=free)
@@ -317,6 +332,7 @@ class Keymaster:
                 # boundary that matters.
                 expanded=len(chips) > max_chips,
                 neighbours=self.gk.eth_neighbours(units),
+                unreset=[u for u in units if self.gk.is_unreset(u)],
             )
             history.log(self.gk.history_root, "granted", lease_id=lease_id, who=who,
                        reason=reason, chips=grant.bdfs,
@@ -1004,6 +1020,9 @@ class Keymaster:
             # A reset that covered a whole board brings its on-board link back;
             # one die of a shared board on its own takes it down.
             if reset_ok:
+                if not foreign and not unheld:
+                    for unit in units:
+                        self.gk.clear_unreset(unit)
                 _, marked = self.gk.settle_split(chips)
                 for serial in marked:
                     message += (f"; board {serial} needs a whole-board reset "

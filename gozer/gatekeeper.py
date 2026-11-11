@@ -897,6 +897,8 @@ class Gatekeeper:
                     lease_id = lease.get("lease_id")
                     if not self.release_unit(unit, expected_lease_id=lease_id):
                         continue
+                    # Nothing resets a reaped unit; say so to its next tenant.
+                    self.mark_unreset(unit)
                     if lease_id:
                         self.delete_lease(lease_id)
                     since = lease.get("since")
@@ -937,6 +939,8 @@ class Gatekeeper:
         problem -- clear_clean's unlink is equally unable to remove another
         user's file, and equally suppressed.
         """
+        with contextlib.suppress(OSError):
+            os.unlink(self._unreset_marker(unit_key))
         path = self._clean_marker(unit_key)
         tmp = f"{path}.tmp.{os.getpid()}"
         try:
@@ -946,6 +950,24 @@ class Gatekeeper:
         except OSError:
             with contextlib.suppress(OSError):
                 os.unlink(tmp)
+
+    def _unreset_marker(self, unit_key: str) -> str:
+        return os.path.join(self.root, "gate", f"{unit_key}.unreset")
+
+    def mark_unreset(self, unit_key: str) -> None:
+        """A unit given back without a reset because its lease was reaped
+        (its workload crashed or was killed). Cleared by the next successful
+        reset (mark_clean). Best effort, as mark_clean."""
+        with contextlib.suppress(OSError):
+            with open(self._unreset_marker(unit_key), "w") as f:
+                f.write(utcnow() + "\n")
+
+    def clear_unreset(self, unit_key: str) -> None:
+        with contextlib.suppress(OSError):
+            os.unlink(self._unreset_marker(unit_key))
+
+    def is_unreset(self, unit_key: str) -> bool:
+        return os.path.exists(self._unreset_marker(unit_key))
 
     def clear_clean(self, unit_key: str) -> None:
         with contextlib.suppress(OSError):
@@ -1069,7 +1091,8 @@ class Gatekeeper:
                             for c in self.chips_in_unit(u))]
 
     def plan_queue(self, free: list[str] | None = None,
-                   before_seq: int | None = None
+                   before_seq: int | None = None,
+                   force_active: frozenset = frozenset()
                    ) -> tuple[dict[str, str], list[str]]:
         """Which free units the queue holds back, and which tickets fit now.
 
@@ -1108,9 +1131,9 @@ class Gatekeeper:
         for rec in self.queue_entries():
             if before_seq is not None and rec.get("seq", 0) >= before_seq:
                 break
-            if not self.queue.is_active(rec, now):
-                continue
             ticket = rec.get("ticket")
+            if ticket not in force_active and not self.queue.is_active(rec, now):
+                continue
             try:
                 lo = int(rec.get("min_chips") or 1)
                 hi = int(rec.get("max_chips") or lo)
