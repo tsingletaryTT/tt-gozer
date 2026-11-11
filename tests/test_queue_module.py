@@ -59,6 +59,7 @@ def test_prune_drops_only_what_has_aged_out(tmp_path):
     path = q._ticket_path(old["ticket"])
     rec = json.load(open(path))
     rec["since"] = "2000-01-01T00:00:00Z"
+    rec["seen_at"] = "2000-01-01T00:00:00Z"   # and never polled since
     json.dump(rec, open(path, "w"))
 
     dropped = q.prune()

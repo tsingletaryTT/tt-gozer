@@ -53,10 +53,40 @@ CLAIM_WINDOW_SECONDS = 90
 # 90-second claim window that nobody takes, after which the claim-window
 # expiry already sends the ticket to the back of the queue.
 #
-# Known limitation (see the project CLAUDE.md): `since` is stamped at enqueue
-# and never refreshed, so an agent polling correctly behind a multi-hour
-# lease still loses its place at the one-hour mark.
+# The hour counts from the ticket's last poll (`seen_at`, refreshed by
+# `gozer wait` and by `acquire --ticket`), not from enqueue, so an agent
+# polling correctly behind a multi-hour lease keeps its place.
 TICKET_MAX_AGE_SECONDS = 3600
+
+# How recently a ticket's waiter must have polled for the ticket to *reserve*
+# free units ahead of later requests (see Gatekeeper.plan_queue). `gozer wait`
+# refreshes `seen_at` while it blocks (up to 8 minutes per call), so a waiter
+# in an ordinary wait loop -- or one that steps away briefly between waits --
+# stays active. A ticket nobody has polled for this long keeps its place in
+# line but stops holding units back from everyone behind it, so an abandoned
+# ticket cannot idle the box for the full TICKET_MAX_AGE_SECONDS.
+RESERVE_ACTIVE_SECONDS = 600
+
+# How long a ticket that does not fit yet may hold free units back, counted
+# from `since` (which _send_to_back keeps). Holding is what stops a big
+# request starving behind small ones; the cap is what stops a big request
+# behind a lease that never ends -- a 24/7 model server -- from idling the
+# rest of the box for as long as it keeps polling. After the cap the waiter
+# keeps its place in line but behaves as before reservations existed.
+RESERVE_BLOCKED_MAX_SECONDS = 3600
+
+# `acquire --ticket` is how `gozer wait` polls, once a second; refreshing
+# `seen_at` on every poll would rewrite the ticket file every second.
+TOUCH_MIN_INTERVAL_SECONDS = 30
+
+
+def last_seen(rec: dict) -> str | None:
+    """The ticket's latest sign of life: its last poll, else its creation."""
+    # Strings only: a hand-edited number here must not raise in every
+    # acquire; a ticket with no usable stamp is judged ancient instead.
+    stamps = [t for t in (rec.get("since"), rec.get("seen_at"))
+              if isinstance(t, str) and t]
+    return max(stamps) if stamps else None
 
 
 class TicketQueue:
@@ -123,7 +153,9 @@ class TicketQueue:
                     "gozer: could not generate a unique queue ticket after "
                     f"{self._TICKET_COLLISION_RETRIES} attempts")
             record = dict(request)
-            record.update({"ticket": ticket, "seq": seq, "since": utcnow()})
+            now = utcnow()
+            record.update({"ticket": ticket, "seq": seq, "since": now,
+                           "seen_at": now})
             path = os.path.join(self.queue_dir, f"{seq:06d}-{ticket}.json")
             _atomic_write_json(path, record)
             return record
@@ -182,6 +214,42 @@ class TicketQueue:
             if self._claim_window_ticket() == ticket:
                 self._close_claim_window()
 
+    def touch(self, ticket: str, min_interval: float = 0) -> None:
+        """Record that this ticket's waiter is still polling (`seen_at`).
+
+        Keeps a correctly-polling waiter from aging out behind a long lease,
+        and keeps its reservation alive (RESERVE_ACTIVE_SECONDS). A missing
+        ticket is left alone: the caller reports that on its own path.
+        """
+        with self._critical_section():
+            path = self._ticket_path(ticket)
+            rec = _read_json(path) if path else None
+            if not rec:
+                return
+            now = utcnow()
+            seen = rec.get("seen_at")
+            if (min_interval and isinstance(seen, str) and seen
+                    and _elapsed_seconds(seen, now) < min_interval):
+                return
+            rec = dict(rec)
+            rec["seen_at"] = now
+            _atomic_write_json(path, rec)
+
+    def may_hold_while_blocked(self, rec: dict, now: str | None = None) -> bool:
+        """May a ticket that does not fit yet still hold units back?"""
+        since = rec.get("since")
+        if not isinstance(since, str) or not since:
+            return False
+        return (_elapsed_seconds(since, now or utcnow())
+                <= RESERVE_BLOCKED_MAX_SECONDS)
+
+    def is_active(self, rec: dict, now: str | None = None) -> bool:
+        """Has this ticket's waiter polled within RESERVE_ACTIVE_SECONDS?"""
+        seen = last_seen(rec)
+        if not seen:
+            return False
+        return _elapsed_seconds(seen, now or utcnow()) <= RESERVE_ACTIVE_SECONDS
+
     def _is_abandoned(self, rec: dict, now: str) -> bool:
         """Has this ticket been left behind? Judged by age, and only by age.
 
@@ -192,10 +260,12 @@ class TicketQueue:
         that are working exactly as intended. See TICKET_MAX_AGE_SECONDS for
         the full reasoning and for what a future blocking mode would need.
         """
-        since = rec.get("since")
-        # A ticket with no `since` at all is malformed, not fresh: treat it
+        # Age counts from the last poll (`seen_at`, refreshed by `gozer wait`),
+        # so a waiter polling behind a multi-hour lease keeps its place.
+        seen = last_seen(rec)
+        # A ticket with no timestamp at all is malformed, not fresh: treat it
         # as maximally old rather than trusting it forever.
-        elapsed = _elapsed_seconds(since, now) if since else float("inf")
+        elapsed = _elapsed_seconds(seen, now) if seen else float("inf")
         return elapsed > TICKET_MAX_AGE_SECONDS
 
     def prune(self) -> list[str]:

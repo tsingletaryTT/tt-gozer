@@ -125,6 +125,40 @@ def no_real_proc(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_real_reset(monkeypatch):
+    """Fail a test that would run the real `tt-smi`.
+
+    The fake QUIETBOX uses the same PCI addresses as a real QuietBox, so a
+    test that releases a lease without faking the reset (a
+    `km.reset_runner`, or `GOZER_RESET_CMD`) runs `tt-smi -r` on the real
+    chips with those addresses. On 2026-11-11 that reset a live model
+    server's board. Refuse any `tt-smi` argv before it can start, and drop a
+    `GOZER_RESET_CMD` inherited from the developer's shell so a test sees
+    only what it sets itself.
+    """
+    import subprocess
+    real_run = subprocess.run
+    attempts = []
+
+    def guarded(argv, *args, **kwargs):
+        first = argv[0] if isinstance(argv, (list, tuple)) and argv else argv
+        if isinstance(first, str) and os.path.basename(first) == "tt-smi":
+            attempts.append(argv)
+            raise AssertionError(
+                f"this test runs the real tt-smi ({argv!r}); fake the reset "
+                "with km.reset_runner or GOZER_RESET_CMD=/bin/true")
+        return real_run(argv, *args, **kwargs)
+
+    monkeypatch.delenv("GOZER_RESET_CMD", raising=False)
+    monkeypatch.setattr(subprocess, "run", guarded)
+    yield
+    # release() catches a failed reset by design, so the raise above can be
+    # swallowed; fail the test here regardless.
+    if attempts:
+        pytest.fail(f"test tried to run the real tt-smi: {attempts!r}")
+
+
+@pytest.fixture(autouse=True)
 def no_real_names_file(monkeypatch, tmp_path):
     """Point GOZER_NAMES at a path that does not exist.
 

@@ -157,6 +157,37 @@ def _refuse_unreadable_exact(gk, exact, as_json) -> int | None:
     return EXIT_UNAVAILABLE
 
 
+def _queue_view(gk, states) -> list[dict]:
+    """Queue entries plus what each is doing now: `active` (its waiter polled
+    recently enough to hold units) and `holding` (free units held back for it,
+    see Gatekeeper.plan_queue). Built from `states` -- a reap=False reconcile
+    -- so looking at the queue never reaps anything."""
+    by_chip = {s.chip.bdf: s.state for s in states}
+    free = [u for u in gk.all_units()
+            if gk.chips_in_unit(u)
+            and all(by_chip.get(c.bdf) == "FREE" for c in gk.chips_in_unit(u))]
+    reserved, _ = gk.plan_queue(free=free)
+    out = []
+    for e in gk.queue_entries():
+        holding = sorted(u for u, t in reserved.items() if t == e["ticket"])
+        out.append({**e, "active": gk.queue.is_active(e), "holding": holding})
+    return out
+
+
+def _queue_line(gk, i: int, e: dict) -> str:
+    line = f"{i}) {e['who']}  wants {e['min_chips']} chip(s)"
+    if e.get("holding"):
+        names = []
+        for u in e["holding"]:
+            chips = gk.chips_in_unit(u)
+            bname = gk.names.board_name(chips[0].serial) if chips else None
+            names.append(bname or u)
+        line += f"  holding {', '.join(names)}"
+    elif not e.get("active", True):
+        line += "  (idle: not holding boards)"
+    return line
+
+
 def cmd_status(args) -> int:
     gk, _ = _make(args)
     # reap=False: `status` is documented as the safe, read-only command --
@@ -196,7 +227,7 @@ def cmd_status(args) -> int:
              "name": None, "board_name": None, "position": None}
             for c in gk.unreadable
         ],
-        "queue": gk.queue_entries(),
+        "queue": _queue_view(gk, states),
         **_names_payload(gk),
     }
     # `states` is already in display order and the unreadable chips follow it.
@@ -250,12 +281,11 @@ def cmd_status(args) -> int:
     for e in gk.names.missing:
         lines.append(f"named but not on this machine: {e.name} "
                      f"(serial {e.serial})")
-    q = gk.queue_entries()
+    q = payload["queue"]
     if q:
         lines.append("queue:")
         for i, e in enumerate(q, 1):
-            lines.append(f"  {i}) {e['who']}  wants {e['min_chips']} chip(s)"
-                         f"  since {e['since']}")
+            lines.append(f"  {_queue_line(gk, i, e)}  since {e['since']}")
     _emit(payload, "\n".join(lines), args.json)
     return EXIT_OK
 
@@ -395,6 +425,7 @@ def cmd_acquire(args) -> int:
 def cmd_wait(args) -> int:
     gk, km = _make(args)
     deadline = time.monotonic() + parse_duration(args.timeout)
+    last_touch = None
     while time.monotonic() < deadline:
         entry = next((e for e in gk.queue_entries()
                       if e["ticket"] == args.ticket), None)
@@ -402,6 +433,12 @@ def cmd_wait(args) -> int:
             _emit({"granted": False, "ticket": args.ticket, "reason": "gone"},
                   f"ticket {args.ticket} is no longer queued", args.json)
             return EXIT_NO_LEASE
+        # A waiting ticket is a live one: refresh `seen_at` (at most every
+        # 30 s, not every poll) so it neither ages out behind a long lease
+        # nor loses the units it holds back for itself.
+        if last_touch is None or time.monotonic() - last_touch >= 30:
+            gk.touch_ticket(args.ticket)
+            last_touch = time.monotonic()
         if gk.may_claim(args.ticket):
             # No explicit pid here either -- same detached lease as
             # cmd_acquire (see its comment). `wait` claims on behalf of
@@ -453,9 +490,9 @@ def cmd_wait(args) -> int:
 
 def cmd_queue(args) -> int:
     gk, _ = _make(args)
-    entries = gk.queue_entries()
+    entries = _queue_view(gk, gk.reconcile(reap=False))
     human = "\n".join(
-        f"{i}) {e['who']}  wants {e['min_chips']} chip(s)  ticket {e['ticket']}"
+        f"{_queue_line(gk, i, e)}  ticket {e['ticket']}"
         for i, e in enumerate(entries, 1)) or "(queue empty)"
     _emit({"queue": entries}, human, args.json)
     return EXIT_OK

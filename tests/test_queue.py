@@ -77,7 +77,9 @@ def _backdate_ticket(gk, ticket, since):
     path = gk._ticket_path(ticket)
     with open(path) as f:
         rec = json.load(f)
+    # Enqueued then, and not polled since: age counts from the last poll.
     rec["since"] = since
+    rec["seen_at"] = since
     with open(path, "w") as f:
         json.dump(rec, f)
 

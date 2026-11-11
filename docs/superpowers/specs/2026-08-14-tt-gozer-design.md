@@ -466,6 +466,19 @@ ticket's `pid` and `detached` fields are recorded for humans reading `queue/*.js
 not consulted. If a blocking run mode is ever added, that mode — and only that mode — could
 reintroduce a liveness check for its own tickets.
 
+*Amended 2026-11-11: fit-aware windows and reservations.* Opening the window for the head
+unconditionally starved large requests: when one board freed under a `--chips all` head, the
+head could not use it, everyone waited out 90 s, the head went to the back, and the next
+one-board job took the board. With no window open, a newcomer could also take a freed board
+past every waiter. Now each ticket carries `seen_at`, refreshed by `gozer wait` (every 30 s)
+and by `acquire --ticket`, and both the one-hour drop and a new `RESERVE_ACTIVE_SECONDS`
+(**600**) count from it. `Gatekeeper.plan_queue` walks the active tickets in FIFO order: a
+ticket that fits the free units reserves exactly what it would be granted; one that does not
+fit yet reserves the free units it could use (only its unit for `--exact`, only clean ones for
+`--fresh`); one that could not fit even on every grantable unit reserves nothing. `acquire`
+allocates around the reservations of tickets ahead of the caller, and `release` opens the
+window for the first ticket that fits, or for none. `reset-all` ignores reservations.
+
 Elastic requests (`1-4`) are satisfied at whatever is available above the minimum, so a
 large request cannot starve behind a stream of small ones — the head of queue is served
 first regardless of size.

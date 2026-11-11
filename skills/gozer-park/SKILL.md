@@ -26,10 +26,13 @@ If the board is busy, `acquire` exits 10 and prints a ticket. Do other work, the
 same `acquire` again with `--ticket <ticket>` added. Sleep a few seconds between calls and do
 not spin. Every call exits 10 again until your ticket is at the head and the chips are free.
 
-- When chips free up, the head ticket gets a 90 second claim window. A retry loop that sleeps
-  longer than that can lose its place, because the ticket then moves to the back.
-- A ticket lives at most one hour. After that `acquire --ticket` exits 13. Take a new ticket by
-  running `acquire` without `--ticket`.
+- When chips free up, the first ticket they fit gets a 90 second claim window. A retry loop
+  that sleeps longer than that can lose its place, because the ticket then moves to the back.
+- While you keep retrying (at least every 10 minutes), your ticket holds back the free boards
+  it needs, so smaller requests behind you cannot keep taking them. A ticket you stop retrying
+  keeps its place but stops holding boards.
+- A ticket you have not retried for an hour is dropped. After that `acquire --ticket` exits 13.
+  Take a new ticket by running `acquire` without `--ticket`.
 - Do not use `gozer wait` for this. `wait` grants the lease itself, and it does so without an
   owner pid, so the lease would fall back to the 15 minute grace window.
 

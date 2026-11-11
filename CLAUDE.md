@@ -118,11 +118,6 @@ and roughly what fixing it would take.
   refuse a unit that is mid-release. Not attempted here: it is a state-format
   change, and the reap would need a staleness rule for a crashed releaser.
   `reset` has the same window and reports it as exit 18.
-* **A queued agent loses its place after an hour even while polling correctly.**
-  `since` is stamped at enqueue and never refreshed, and `_send_to_back`
-  preserves it, so a ticket behind a multi-hour lease expires under a caller
-  doing everything right. *Fix:* refresh `since` on each `wait`, or judge age
-  from `requeued_at` when present.
 * **After a reap, nothing ever resets those chips.** The reap has never reset,
   and `release` now correctly declines to reset a unit it no longer holds, so a
   crashed workload's silicon goes to the next plain `acquire` un-reset. `--fresh`
@@ -680,3 +675,66 @@ Design questions the issue did not answer, and what was picked:
 
 Not done: ordering of the chips inside a board for boards that have no name (still device index),
 a board-level reset, and installing the udev rules (printed, not installed).
+
+## Queue fairness: fit-aware windows and reservations (2026-11-11)
+
+Prompt: an audit for running several small models side by side found the queue could starve a
+whole-box request; "fix the queue".
+
+Cause, read from the code: `release` opened the 90 s claim window for the head ticket whether or
+not the freed units fit it. A `--chips all` head facing one free board blocked every other waiter
+for 90 s, was sent to the back, and the next one-board job took the board; with no window open, a
+newcomer could take a freed board past every waiter. A big job on a box kept busy by one-board
+jobs could wait for ever.
+
+Fix:
+* Tickets carry `seen_at`, refreshed by `gozer wait` (at most every 30 s) and by every
+  `acquire --ticket`. The one-hour drop counts from it, which closes the known limitation "a queued
+  agent loses its place after an hour even while polling correctly".
+* `Gatekeeper.plan_queue` walks active tickets (`seen_at` within `RESERVE_ACTIVE_SECONDS`, 600) in
+  FIFO order. A ticket that fits reserves what it would be granted; one that does not yet fit
+  reserves the free units it could use (`--exact`: its unit only; `--fresh`: clean units only); one
+  that cannot fit even on every grantable unit (`grantable_units`, excludes DEGRADED) reserves
+  nothing.
+* `acquire` allocates around the reservations of tickets ahead of the caller (`allocate(exclude=,
+  free=)`; the selection moved into a pure `_select`). `reset-all` ignores reservations.
+* `release` opens the window for the first ticket that fits, or for none, so a head that cannot
+  fit is not demoted.
+
+Also: `tests/conftest.py` gained an autouse `no_real_reset` guard. A first draft of the new tests
+released leases without faking the reset; `QUIETBOX`'s BDFs are this box's real BDFs, so the run
+reset the real board 1 (chips 0-1) under the live Qwen server. The guard refuses any `tt-smi` argv
+and fails the test even when `release` swallows the error.
+
+TDD: `tests/test_queue_reservation.py` (8 tests, red before). Three mutations (no reservation in
+acquire, window to the head regardless, no touch on replay) each turn tests red. Three existing
+aging tests now backdate `seen_at` with `since`. Full suite 717. Version not bumped.
+
+`status` and `queue` show each waiter's held units ("holding <board>", or "idle: not holding
+boards"), and `--json` adds `active` and `holding` per entry; computed from a reap=False reconcile,
+so looking still never reaps.
+
+An independent review (fresh subagent, adversarial, tests in a scratch dir) then found, with proving
+tests: an `--exact --fresh` waiter held a dirty board forever (it could never take it, and holding it
+stopped the lease-and-release that cleans it); an unknown or pruned `--ticket` skipped every
+reservation; a polling blocked waiter held units with no time limit behind a lease that never ends,
+or behind its own lease (hold-and-wait); a window holder was refused inside its own window when a
+ticket ahead woke up, then demoted; `wait` rewrote the ticket file every second; a non-string
+`seen_at` or non-integer `min_chips` broke every acquire. Fixes: `--fresh` holds clean units only,
+on both paths; an unknown ticket is planned as a newcomer; a blocked ticket holds units for at most
+`RESERVE_BLOCKED_MAX_SECONDS` (3600) from `since` and never counts units leased to its own `who` or
+owner pid; the window holder skips reservations; `touch` from `acquire` is throttled to
+`TOUCH_MIN_INTERVAL_SECONDS` (30); `last_seen` ignores non-strings and a ticket with corrupt counts
+holds nothing. Seven tests in `tests/test_queue_reservation.py`; the reviewer's five tests, which
+assert the bad behaviour, all fail now.
+
+Hardware (2x p300c, dev sandbox state): the whole-box scenario; an `--exact` waiter on a busy board
+does not hold the other board and gets the window when its board frees; `gozer run` while busy exits
+10 with a ticket; an idle waiter keeps its place while a newcomer passes it, and becomes active again
+on its next poll; `reset-all` is refused while a claim window is open and runs while a waiter holds
+the whole box, which then gets all 4 chips.
+
+Not done: the window is still exclusive, so while a fitting ticket holds it, another ticket that
+fits the remaining units waits up to 90 s. An unknown `--ticket` that fits free, unreserved chips is
+granted rather than refused with 13 (as before this change).
+

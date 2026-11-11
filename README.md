@@ -162,8 +162,8 @@ $ gozer history -n 5
 | `names set <name> <board>` / `names unset <name>` | name a board (by serial, PCI address, device index or an existing name), or remove a name. `set` refuses a board that is under a lease |
 | `names udev` | print udev rules for `/dev/tenstorrent/by-name/`; writes nothing |
 | `acquire` / `summon` `--chips N\|all\|LO-HI --who W` [`--owner-pid N`] | take a lease on chips |
-| `wait <ticket>` [`--timeout 8m`] | block until a queued ticket is granted |
-| `queue` [`--json`] | list waiting requests |
+| `wait <ticket>` [`--timeout 8m`] | block until a queued ticket is granted; while it waits it keeps the ticket alive and holding its boards |
+| `queue` [`--json`] | list waiting requests, and the free boards each active waiter is holding |
 | `cancel <ticket>` | drop a queue ticket |
 | `renew <lease>` [`--expect D`] | heartbeat: restarts a detached lease's 900 s grace window, so work that will not open the device for a while can keep its chips by renewing at least every 15 minutes. `--expect` also extends the advisory deadline |
 | `release` / `banish <lease>` [`--no-reset`] [`--force`] | give chips back (resets them); the reset opens every device on the box for about 42 s, so another board shows `BUSY-UNTRACKED` meanwhile. Do not preflight or acquire a board while another board's reset runs |
@@ -322,6 +322,12 @@ Waiting is designed around agents: `acquire` never blocks, so an agent gets a ti
 go do other work. `gozer wait <ticket>` blocks for a bounded 8 minutes — deliberately under
 the 10-minute ceiling on a Claude Code tool call — and returns either a grant or your current
 position, so a loop is always safe.
+
+The queue is first come, first served, including for big requests. A waiter that has polled in
+the last 10 minutes holds back the free boards it needs, so a `--chips all` request is not
+starved by one-board jobs that keep taking each board as it frees. When chips free, the
+90-second claim window goes to the first waiter they fit. A waiter that stops polling keeps its
+place but stops holding boards, and is dropped after an hour without a poll.
 
 ## The one surprising thing
 
